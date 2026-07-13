@@ -13,7 +13,9 @@ On other desktops, Bingwall shows only an unsupported-platform message and perfo
 ## Features
 
 - English or Simplified Chinese UI selected from the system locale
-- Animated horizontal pager with buttons, keyboard arrows, wheel/touchpad scrolling, and touch swipes
+- Full-window immersive wallpaper preview with floating controls over readable edge scrims
+- Translation-only horizontal pager with pointer/touch dragging, snap, buttons, keyboard arrows, and wheel/touchpad scrolling
+- 1280×720 minimum window size with proportional 16:9 resizing and uniformly scaled controls
 - Ten-entry metadata batches with prioritized background preloading around the selected entry
 - Manual **Set as wallpaper** action independent of automation
 - **Daily change** toggle that is off on first launch

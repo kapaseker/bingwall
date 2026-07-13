@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use iced::{Point, Subscription, Task, keyboard, mouse, touch, widget::image};
+use iced::{Point, Size, Subscription, Task, event, keyboard, mouse, touch, widget::image, window};
 
 use crate::{
     cache,
@@ -18,16 +18,34 @@ use crate::{
 };
 
 const PAGE_BATCH: usize = 10;
-const TRANSITION_DURATION: Duration = Duration::from_millis(180);
+const TRANSITION_DURATION: Duration = Duration::from_millis(360);
+const MIN_TRANSITION_DURATION: Duration = Duration::from_millis(120);
 const WHEEL_DEBOUNCE: Duration = Duration::from_millis(240);
 const MAX_IMAGE_TASKS: usize = 2;
 const GPU_PRELOAD_LIMIT: usize = 4;
+pub(crate) const BASE_WIDTH: f32 = 1280.0;
+pub(crate) const BASE_HEIGHT: f32 = 720.0;
+const ASPECT_RATIO: f32 = BASE_WIDTH / BASE_HEIGHT;
+const SNAP_DISTANCE_RATIO: f32 = 0.12;
+const SNAP_VELOCITY: f32 = 650.0;
+const SIZE_EPSILON: f32 = 0.5;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Transition {
     pub from: usize,
-    pub direction: f32,
+    pub to: usize,
+    pub start_offset: f32,
+    pub end_offset: f32,
     pub started: Instant,
+    pub duration: Duration,
+}
+
+#[derive(Debug, Clone)]
+struct PagerDrag {
+    start_x: f32,
+    last_x: f32,
+    last_at: Instant,
+    velocity: f32,
 }
 
 #[derive(Debug)]
@@ -54,8 +72,14 @@ pub(crate) struct State {
     pub status: String,
     pub busy: bool,
     pub transition: Option<Transition>,
+    pub pager_offset: f32,
+    pager_drag: Option<PagerDrag>,
+    pager_pointer_x: Option<f32>,
+    pager_width: f32,
+    window_size: Size,
+    resize_target: Option<Size>,
     last_wheel: Option<Instant>,
-    touch_start: Option<(touch::Finger, Point)>,
+    touch_finger: Option<touch::Finger>,
 }
 
 impl State {
@@ -100,6 +124,11 @@ pub(crate) enum Message {
     ToggleDaily(bool),
     ToggleFinished(bool, Result<Settings, String>),
     RuntimeEvent(iced::Event),
+    CapturedTouchEvent(iced::Event),
+    WindowResized(window::Id, Size),
+    PagerPointerMoved(Point),
+    PagerPressed(f32),
+    PagerReleased,
     AnimationTick(Instant),
 }
 
@@ -108,7 +137,11 @@ pub fn run() -> iced::Result {
     iced::application(boot, update, ui::view)
         .title("Bingwall")
         .subscription(subscription)
-        .window_size((1100.0, 760.0))
+        .window(window::Settings {
+            size: Size::new(BASE_WIDTH, BASE_HEIGHT),
+            min_size: Some(Size::new(BASE_WIDTH, BASE_HEIGHT)),
+            ..window::Settings::default()
+        })
         .centered()
         .antialiasing(true)
         .run()
@@ -140,8 +173,14 @@ fn boot() -> (State, Task<Message>) {
         status: locale.text(TextKey::LoadingFeed).into(),
         busy: true,
         transition: None,
+        pager_offset: 0.0,
+        pager_drag: None,
+        pager_pointer_x: None,
+        pager_width: BASE_WIDTH,
+        window_size: Size::new(BASE_WIDTH, BASE_HEIGHT),
+        resize_target: None,
         last_wheel: None,
-        touch_start: None,
+        touch_finger: None,
     };
     let task = Task::perform(
         async {
@@ -371,11 +410,28 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::RuntimeEvent(event) => handle_runtime_event(state, event),
+        Message::CapturedTouchEvent(event) => handle_touch_event(state, event),
+        Message::WindowResized(id, size) => handle_window_resize(state, id, size),
+        Message::PagerPointerMoved(position) => {
+            state.pager_pointer_x = Some(position.x);
+            update_pager_drag(state, position.x, Instant::now());
+            Task::none()
+        }
+        Message::PagerPressed(width) => {
+            if state.transition.is_none() {
+                state.pager_width = width.max(1.0);
+                let x = state.pager_pointer_x.unwrap_or(width / 2.0);
+                start_pager_drag(state, x, Instant::now());
+            }
+            Task::none()
+        }
+        Message::PagerReleased => finish_pager_drag(state, Instant::now()),
         Message::AnimationTick(now) => {
             if state.transition.as_ref().is_some_and(|transition| {
-                now.duration_since(transition.started) >= TRANSITION_DURATION
+                now.duration_since(transition.started) >= transition.duration
             }) {
                 state.transition = None;
+                state.pager_offset = 0.0;
             }
             Task::none()
         }
@@ -532,7 +588,12 @@ fn is_current_url(state: &State, image_url: &str) -> bool {
 
 /// Moves the selection within bounds, extends the visible page, and starts a transition.
 fn navigate(state: &mut State, direction: isize) -> Task<Message> {
-    if state.entries.is_empty() {
+    navigate_from_offset(state, direction, 0.0)
+}
+
+/// Starts a horizontal snap from the supplied normalized viewport offset.
+fn navigate_from_offset(state: &mut State, direction: isize, start_offset: f32) -> Task<Message> {
+    if state.entries.is_empty() || state.transition.is_some() || state.pager_drag.is_some() {
         return Task::none();
     }
     let next = state.selected.saturating_add_signed(direction);
@@ -548,12 +609,98 @@ fn navigate(state: &mut State, direction: isize) -> Task<Message> {
     if state.selected + 2 >= state.visible_count && state.visible_count < state.entries.len() {
         state.visible_count = (state.visible_count + PAGE_BATCH).min(state.entries.len());
     }
+    let end_offset = -(direction.signum() as f32);
     state.transition = Some(Transition {
         from: previous,
-        direction: direction.signum() as f32,
+        to: next,
+        start_offset,
+        end_offset,
         started: Instant::now(),
+        duration: snap_duration(start_offset, end_offset),
     });
+    state.pager_offset = start_offset;
     schedule_previews(state)
+}
+
+/// Starts a pointer-driven pager gesture.
+fn start_pager_drag(state: &mut State, x: f32, now: Instant) {
+    if state.entries.is_empty() || state.transition.is_some() {
+        return;
+    }
+    state.pager_offset = 0.0;
+    state.pager_drag = Some(PagerDrag {
+        start_x: x,
+        last_x: x,
+        last_at: now,
+        velocity: 0.0,
+    });
+}
+
+/// Updates the normalized horizontal pager offset and release velocity.
+fn update_pager_drag(state: &mut State, x: f32, now: Instant) {
+    let Some(drag) = state.pager_drag.as_mut() else {
+        return;
+    };
+    let elapsed = now.duration_since(drag.last_at).as_secs_f32();
+    if elapsed > f32::EPSILON {
+        let instantaneous = (x - drag.last_x) / elapsed;
+        drag.velocity = drag.velocity * 0.65 + instantaneous * 0.35;
+    }
+    drag.last_x = x;
+    drag.last_at = now;
+
+    let mut offset = (x - drag.start_x) / state.pager_width.max(1.0);
+    let has_previous = state.selected > 0;
+    let has_next = state.selected + 1 < state.entries.len();
+    if !has_previous {
+        offset = offset.min(0.0);
+    }
+    if !has_next {
+        offset = offset.max(0.0);
+    }
+    state.pager_offset = offset.clamp(-1.0, 1.0);
+}
+
+/// Chooses the adjacent page or snaps the pager back to its current page.
+fn finish_pager_drag(state: &mut State, now: Instant) -> Task<Message> {
+    let Some(drag) = state.pager_drag.take() else {
+        return Task::none();
+    };
+    let direction = snap_direction(state.pager_offset, drag.velocity);
+    if direction != 0 {
+        return navigate_from_offset(state, direction, state.pager_offset);
+    }
+    if state.pager_offset.abs() > f32::EPSILON {
+        state.transition = Some(Transition {
+            from: state.selected,
+            to: state.selected,
+            start_offset: state.pager_offset,
+            end_offset: 0.0,
+            started: now,
+            duration: snap_duration(state.pager_offset, 0.0),
+        });
+    }
+    Task::none()
+}
+
+/// Returns the requested page direction from drag distance and velocity.
+fn snap_direction(offset: f32, velocity: f32) -> isize {
+    if offset <= -SNAP_DISTANCE_RATIO || velocity <= -SNAP_VELOCITY {
+        1
+    } else if offset >= SNAP_DISTANCE_RATIO || velocity >= SNAP_VELOCITY {
+        -1
+    } else {
+        0
+    }
+}
+
+/// Keeps snap velocity consistent by scaling duration with remaining distance.
+fn snap_duration(start_offset: f32, end_offset: f32) -> Duration {
+    let distance = (end_offset - start_offset).abs().min(1.0);
+    let millis = (TRANSITION_DURATION.as_millis() as f32 * distance)
+        .round()
+        .max(MIN_TRANSITION_DURATION.as_millis() as f32);
+    Duration::from_millis(millis as u64)
 }
 
 /// Starts the work needed to download and apply the selected wallpaper.
@@ -695,40 +842,106 @@ fn handle_runtime_event(state: &mut State, event: iced::Event) -> Task<Message> 
                 navigate(state, if movement < 0.0 { 1 } else { -1 })
             }
         }
+        iced::Event::Touch(_) => handle_touch_event(state, event),
+        _ => Task::none(),
+    }
+}
+
+/// Maps touch positions to the same live drag and snap behavior as the mouse.
+fn handle_touch_event(state: &mut State, event: iced::Event) -> Task<Message> {
+    match event {
         iced::Event::Touch(touch::Event::FingerPressed { id, position }) => {
-            state.touch_start = Some((id, position));
+            let now = Instant::now();
+            state.touch_finger = Some(id);
+            state.pager_width = state.window_size.width.max(1.0);
+            start_pager_drag(state, position.x, now);
             Task::none()
         }
-        iced::Event::Touch(touch::Event::FingerLifted { id, position }) => {
-            let start = state
-                .touch_start
-                .take()
-                .filter(|(finger, _)| *finger == id)
-                .map(|(_, point)| point);
-            match start.map(|point| position.x - point.x) {
-                Some(distance) if distance > 50.0 => navigate(state, -1),
-                Some(distance) if distance < -50.0 => navigate(state, 1),
-                _ => Task::none(),
+        iced::Event::Touch(touch::Event::FingerMoved { id, position }) => {
+            if state.touch_finger.is_some_and(|finger| finger == id) {
+                update_pager_drag(state, position.x, Instant::now());
+            }
+            Task::none()
+        }
+        iced::Event::Touch(touch::Event::FingerLifted { id, .. }) => {
+            if state.touch_finger.take().is_some_and(|finger| finger == id) {
+                finish_pager_drag(state, Instant::now())
+            } else {
+                Task::none()
             }
         }
-        iced::Event::Touch(touch::Event::FingerLost { .. }) => {
-            state.touch_start = None;
+        iced::Event::Touch(touch::Event::FingerLost { id, .. }) => {
+            if state.touch_finger.take().is_some_and(|finger| finger == id) {
+                state.pager_drag = None;
+                state.pager_offset = 0.0;
+            }
             Task::none()
         }
         _ => Task::none(),
     }
 }
 
+/// Enforces the 16:9 client-area ratio while honoring the 1280x720 minimum.
+fn handle_window_resize(state: &mut State, id: window::Id, size: Size) -> Task<Message> {
+    if state
+        .resize_target
+        .is_some_and(|target| sizes_are_close(target, size))
+    {
+        state.resize_target = None;
+        state.window_size = size;
+        return Task::none();
+    }
+
+    let corrected = proportional_size(state.window_size, size);
+    state.window_size = corrected;
+    if sizes_are_close(corrected, size) {
+        Task::none()
+    } else {
+        state.resize_target = Some(corrected);
+        window::resize(id, corrected)
+    }
+}
+
+/// Corrects a requested window size using the dimension changed most by the user.
+fn proportional_size(previous: Size, requested: Size) -> Size {
+    let width_change = ((requested.width - previous.width) / previous.width.max(1.0)).abs();
+    let height_change = ((requested.height - previous.height) / previous.height.max(1.0)).abs();
+    let mut corrected = if width_change >= height_change {
+        Size::new(requested.width, requested.width / ASPECT_RATIO)
+    } else {
+        Size::new(requested.height * ASPECT_RATIO, requested.height)
+    };
+    if corrected.width < BASE_WIDTH || corrected.height < BASE_HEIGHT {
+        corrected = Size::new(BASE_WIDTH, BASE_HEIGHT);
+    }
+    corrected
+}
+
+/// Reports whether two logical window sizes differ by less than one resize step.
+fn sizes_are_close(left: Size, right: Size) -> bool {
+    (left.width - right.width).abs() <= SIZE_EPSILON
+        && (left.height - right.height).abs() <= SIZE_EPSILON
+}
+
 /// Subscribes to runtime events and animation ticks required by the current state.
 fn subscription(state: &State) -> Subscription<Message> {
     let events = iced::event::listen().map(Message::RuntimeEvent);
+    let captured_touches = event::listen_with(|event, status, _| {
+        matches!(status, event::Status::Captured)
+            .then_some(event)
+            .filter(|event| matches!(event, iced::Event::Touch(_)))
+    })
+    .map(Message::CapturedTouchEvent);
+    let resize_events = window::resize_events().map(|(id, size)| Message::WindowResized(id, size));
     if state.transition.is_some() {
         Subscription::batch([
             events,
+            captured_touches,
+            resize_events,
             iced::time::every(Duration::from_millis(16)).map(Message::AnimationTick),
         ])
     } else {
-        events
+        Subscription::batch([events, captured_touches, resize_events])
     }
 }
 
@@ -741,10 +954,28 @@ pub(crate) fn transition_progress(state: &State) -> f32 {
             (Instant::now()
                 .duration_since(transition.started)
                 .as_secs_f32()
-                / TRANSITION_DURATION.as_secs_f32())
+                / transition.duration.as_secs_f32())
             .clamp(0.0, 1.0)
         })
         .unwrap_or(1.0)
+}
+
+/// Returns the current normalized horizontal pager offset.
+pub(crate) fn transition_offset(state: &State) -> f32 {
+    state
+        .transition
+        .as_ref()
+        .map(|transition| {
+            let progress = transition_progress(state);
+            transition_offset_at(transition, progress)
+        })
+        .unwrap_or(state.pager_offset)
+}
+
+/// Interpolates a pager transition without changing image scale or opacity.
+fn transition_offset_at(transition: &Transition, progress: f32) -> f32 {
+    transition.start_offset
+        + (transition.end_offset - transition.start_offset) * progress.clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
@@ -799,9 +1030,21 @@ mod tests {
             status: String::new(),
             busy: false,
             transition: None,
+            pager_offset: 0.0,
+            pager_drag: None,
+            pager_pointer_x: None,
+            pager_width: BASE_WIDTH,
+            window_size: Size::new(BASE_WIDTH, BASE_HEIGHT),
+            resize_target: None,
             last_wheel: None,
-            touch_start: None,
+            touch_finger: None,
         }
+    }
+
+    /// Completes a pager animation so a test can issue another navigation input.
+    fn complete_transition(state: &mut State) {
+        state.transition = None;
+        state.pager_offset = 0.0;
     }
 
     #[test]
@@ -810,10 +1053,12 @@ mod tests {
         let mut state = state_with_entries(25);
         for _ in 0..8 {
             let _ = navigate(&mut state, 1);
+            complete_transition(&mut state);
         }
         assert_eq!(state.visible_count, 20);
         for _ in 0..10 {
             let _ = navigate(&mut state, 1);
+            complete_transition(&mut state);
         }
         assert_eq!(state.visible_count, 25);
     }
@@ -825,8 +1070,101 @@ mod tests {
         let _ = navigate(&mut state, -1);
         assert_eq!(state.selected, 0);
         let _ = navigate(&mut state, 1);
+        complete_transition(&mut state);
         let _ = navigate(&mut state, 1);
         assert_eq!(state.selected, 1);
+    }
+
+    #[test]
+    /// Verifies width-led and height-led resizes remain 16:9 and above the minimum.
+    fn window_resize_preserves_the_base_aspect_ratio() {
+        let base = Size::new(BASE_WIDTH, BASE_HEIGHT);
+        assert_eq!(
+            proportional_size(base, Size::new(1600.0, 720.0)),
+            Size::new(1600.0, 900.0)
+        );
+        assert_eq!(
+            proportional_size(base, Size::new(1280.0, 900.0)),
+            Size::new(1600.0, 900.0)
+        );
+        assert_eq!(proportional_size(base, Size::new(900.0, 600.0)), base);
+    }
+
+    #[test]
+    /// Verifies pager snap decisions honor distance, velocity, and direction.
+    fn pager_snap_uses_distance_or_release_velocity() {
+        assert_eq!(snap_direction(-SNAP_DISTANCE_RATIO, 0.0), 1);
+        assert_eq!(snap_direction(SNAP_DISTANCE_RATIO, 0.0), -1);
+        assert_eq!(snap_direction(-0.02, -SNAP_VELOCITY), 1);
+        assert_eq!(snap_direction(0.02, SNAP_VELOCITY), -1);
+        assert_eq!(snap_direction(0.05, 100.0), 0);
+    }
+
+    #[test]
+    /// Verifies a full-page snap is slow enough to remain visually trackable.
+    fn pager_snap_duration_is_deliberate() {
+        assert!(TRANSITION_DURATION >= Duration::from_millis(320));
+    }
+
+    #[test]
+    /// Verifies left and right transitions are linear mirror images.
+    fn pager_motion_is_linear_and_mirrored() {
+        let started = Instant::now();
+        let left = Transition {
+            from: 0,
+            to: 1,
+            start_offset: 0.0,
+            end_offset: -1.0,
+            started,
+            duration: TRANSITION_DURATION,
+        };
+        let right = Transition {
+            from: 1,
+            to: 0,
+            start_offset: 0.0,
+            end_offset: 1.0,
+            started,
+            duration: TRANSITION_DURATION,
+        };
+
+        assert_eq!(transition_offset_at(&left, 0.5), -0.5);
+        assert_eq!(transition_offset_at(&right, 0.5), 0.5);
+        assert_eq!(left.duration, right.duration);
+        assert_eq!(snap_duration(-0.25, -1.0), Duration::from_millis(270));
+    }
+
+    #[test]
+    /// Verifies navigation creates a translation-only snap between adjacent pages.
+    fn pager_navigation_uses_normalized_horizontal_offsets() {
+        let mut state = state_with_entries(3);
+
+        let _ = navigate_from_offset(&mut state, 1, -0.25);
+
+        assert_eq!(state.selected, 1);
+        let transition = state.transition.expect("navigation starts a snap");
+        assert_eq!(transition.from, 0);
+        assert_eq!(transition.to, 1);
+        assert_eq!(transition.start_offset, -0.25);
+        assert_eq!(transition.end_offset, -1.0);
+    }
+
+    #[test]
+    /// Verifies a live pointer drag follows the cursor and snaps to the adjacent page.
+    fn pointer_drag_tracks_and_snaps_horizontally() {
+        let mut state = state_with_entries(3);
+        state.pager_width = 1000.0;
+        let started = Instant::now();
+
+        start_pager_drag(&mut state, 500.0, started);
+        update_pager_drag(&mut state, 300.0, started + Duration::from_millis(200));
+        assert_eq!(state.pager_offset, -0.2);
+
+        let _ = finish_pager_drag(&mut state, started + Duration::from_millis(210));
+
+        assert_eq!(state.selected, 1);
+        let transition = state.transition.expect("release starts a snap");
+        assert_eq!(transition.start_offset, -0.2);
+        assert_eq!(transition.end_offset, -1.0);
     }
 
     #[test]

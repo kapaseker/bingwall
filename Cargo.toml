@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 dirs = "6"
-iced = { version = "0.14", features = ["image", "tokio"] }
+iced = { version = "0.14", features = ["advanced", "image", "tokio"] }
 image = "0.25"
 regex = "1"
 reqwest = "0.13"
