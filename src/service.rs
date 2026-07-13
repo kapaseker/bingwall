@@ -1,4 +1,4 @@
-use std::{io, path::PathBuf};
+use std::{io, path::PathBuf, time::Duration};
 
 use thiserror::Error;
 
@@ -30,6 +30,8 @@ pub enum ServiceError {
     Paths(String),
     #[error("downloaded data is not a supported image: {0}")]
     DecodeImage(#[from] image::ImageError),
+    #[error("background image task failed: {0}")]
+    BackgroundTask(String),
     #[error(transparent)]
     Platform(#[from] PlatformError),
     #[error(transparent)]
@@ -71,21 +73,113 @@ pub async fn ensure_image(
     paths: &AppPaths,
     entry: &WallpaperEntry,
 ) -> Result<PathBuf, ServiceError> {
-    if let Some(cached) = cache::valid_image_path(paths, entry) {
+    let cached_paths = paths.clone();
+    let cached_entry = entry.clone();
+    if let Some(cached) =
+        tokio::task::spawn_blocking(move || cache::valid_image_path(&cached_paths, &cached_entry))
+            .await
+            .map_err(|error| ServiceError::BackgroundTask(error.to_string()))?
+    {
         return Ok(cached);
     }
-    let destination = cache::image_path(paths, entry);
+    download_original(client, paths, entry).await
+}
 
-    let bytes = client
-        .get(&entry.image_url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-    image::load_from_memory(&bytes)?;
-    cache::write_image_atomically(&destination, &bytes).map_err(ServiceError::SaveImage)?;
+pub async fn ensure_preview(
+    client: &reqwest::Client,
+    paths: &AppPaths,
+    entry: &WallpaperEntry,
+) -> Result<PathBuf, ServiceError> {
+    let cached_paths = paths.clone();
+    let cached_entry = entry.clone();
+    if let Some(cached) =
+        tokio::task::spawn_blocking(move || cache::valid_preview_path(&cached_paths, &cached_entry))
+            .await
+            .map_err(|error| ServiceError::BackgroundTask(error.to_string()))?
+    {
+        return Ok(cached);
+    }
+
+    let original = cache::image_path(paths, entry);
+    let original_exists = {
+        let original = original.clone();
+        tokio::task::spawn_blocking(move || original.exists())
+            .await
+            .map_err(|error| ServiceError::BackgroundTask(error.to_string()))?
+    };
+    let original = if original_exists {
+        original
+    } else {
+        download_original(client, paths, entry).await?
+    };
+    let preview = cache::preview_path(paths, entry);
+
+    match generate_preview(original.clone(), preview.clone()).await {
+        Ok(()) => Ok(preview),
+        Err(_) if original_exists => {
+            tokio::task::spawn_blocking(move || std::fs::remove_file(original))
+                .await
+                .map_err(|error| ServiceError::BackgroundTask(error.to_string()))?
+                .ok();
+            let original = download_original(client, paths, entry).await?;
+            generate_preview(original, preview.clone()).await?;
+            Ok(preview)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+async fn generate_preview(original: PathBuf, preview: PathBuf) -> Result<(), ServiceError> {
+    tokio::task::spawn_blocking(move || cache::generate_preview(&original, &preview))
+        .await
+        .map_err(|error| ServiceError::BackgroundTask(error.to_string()))??;
+    Ok(())
+}
+
+async fn download_original(
+    client: &reqwest::Client,
+    paths: &AppPaths,
+    entry: &WallpaperEntry,
+) -> Result<PathBuf, ServiceError> {
+    let destination = cache::image_path(paths, entry);
+    let bytes = download_with_retry(client, &entry.image_url).await?;
+    let write_destination = destination.clone();
+    tokio::task::spawn_blocking(move || {
+        image::load_from_memory(&bytes)?;
+        cache::write_image_atomically(&write_destination, &bytes)
+            .map_err(ServiceError::SaveImage)?;
+        Ok::<_, ServiceError>(())
+    })
+    .await
+    .map_err(|error| ServiceError::BackgroundTask(error.to_string()))??;
     Ok(destination)
+}
+
+async fn download_with_retry(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<Vec<u8>, reqwest::Error> {
+    let mut attempt = 0;
+    loop {
+        let result = async {
+            client
+                .get(url)
+                .send()
+                .await?
+                .error_for_status()?
+                .bytes()
+                .await
+        }
+        .await;
+        match result {
+            Ok(bytes) => return Ok(bytes.to_vec()),
+            Err(_) if attempt < 2 => {
+                attempt += 1;
+                tokio::time::sleep(Duration::from_millis(200 * attempt)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 pub async fn run_scheduled_update() -> Result<PathBuf, ServiceError> {
@@ -153,6 +247,40 @@ mod tests {
 
         assert_eq!(result, image);
         assert!(image.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cached_original_generates_preview_without_network() {
+        let root = std::env::temp_dir().join(format!(
+            "bingwall-service-preview-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = AppPaths {
+            config_dir: root.join("config"),
+            cache_dir: root.join("cache"),
+        };
+        let entry = WallpaperEntry {
+            date: "2026-01-01".into(),
+            description: "Cached original".into(),
+            image_url: "https://127.0.0.1:9/cached.jpg".into(),
+        };
+        let original = cache::image_path(&paths, &entry);
+        std::fs::create_dir_all(paths.images_dir()).unwrap();
+        image::DynamicImage::new_rgb8(3840, 2160)
+            .save(&original)
+            .unwrap();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let preview = runtime
+            .block_on(ensure_preview(&reqwest::Client::new(), &paths, &entry))
+            .unwrap();
+
+        assert_eq!(preview, cache::preview_path(&paths, &entry));
+        assert_eq!(cache::valid_preview_path(&paths, &entry), Some(preview));
         std::fs::remove_dir_all(root).unwrap();
     }
 }
