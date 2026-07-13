@@ -14,11 +14,12 @@ On other desktops, Bingwall shows only an unsupported-platform message and perfo
 
 - English or Simplified Chinese UI selected from the system locale
 - Animated horizontal pager with buttons, keyboard arrows, wheel/touchpad scrolling, and touch swipes
-- Ten-entry metadata batches with image downloads limited to the selected entry and its neighbors
+- Ten-entry metadata batches with prioritized background preloading around the selected entry
 - Manual **Set as wallpaper** action independent of automation
 - **Daily change** toggle that is off on first launch
 - Persistent systemd user timer at 08:00; a missed run executes after the next login or wake
 - Cached feed shown immediately at startup while a refresh runs in the background
+- Versioned 1080p preview cache with 16:9 center cropping; full-resolution files are reserved for wallpaper application
 - Downloaded wallpapers are reused from local storage and kept permanently
 - GNOME and Cinnamon wallpaper application in zoom/fill mode
 
