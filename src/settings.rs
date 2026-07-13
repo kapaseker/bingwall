@@ -9,6 +9,7 @@ pub struct Settings {
     pub daily_change: bool,
     pub applied_image: Option<String>,
     pub last_update_status: Option<String>,
+    pub recent_images: Vec<String>,
 }
 
 #[derive(Debug, Error)]
@@ -39,6 +40,13 @@ impl Settings {
         let temporary = path.with_extension("json.tmp");
         fs::write(&temporary, data).map_err(SettingsError::Write)?;
         fs::rename(temporary, path).map_err(SettingsError::Write)
+    }
+
+    pub fn remember_image(&mut self, path: &Path) {
+        let path = path.to_string_lossy().into_owned();
+        self.recent_images.retain(|recent| recent != &path);
+        self.recent_images.insert(0, path);
+        self.recent_images.truncate(20);
     }
 }
 
@@ -76,11 +84,32 @@ mod tests {
             daily_change: true,
             applied_image: Some("wall.jpg".into()),
             last_update_status: Some("ok".into()),
+            recent_images: vec!["recent.jpg".into()],
         };
 
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), settings);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn keeps_twenty_unique_recent_images() {
+        let mut settings = Settings::default();
+        for index in 0..25 {
+            settings.remember_image(Path::new(&format!("{index}.jpg")));
+        }
+        settings.remember_image(Path::new("20.jpg"));
+
+        assert_eq!(settings.recent_images.len(), 20);
+        assert_eq!(settings.recent_images[0], "20.jpg");
+        assert_eq!(
+            settings
+                .recent_images
+                .iter()
+                .filter(|path| *path == "20.jpg")
+                .count(),
+            1
+        );
     }
 }

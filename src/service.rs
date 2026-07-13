@@ -1,0 +1,123 @@
+use std::{io, path::PathBuf};
+
+use thiserror::Error;
+
+use crate::{
+    FEED_URL, cache,
+    feed::{self, WallpaperEntry},
+    paths::AppPaths,
+    platform::{Desktop, PlatformError},
+    settings::{Settings, SettingsError},
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeedOrigin {
+    Network,
+    Cache,
+}
+
+#[derive(Debug, Error)]
+pub enum ServiceError {
+    #[error("network request failed: {0}")]
+    Network(#[from] reqwest::Error),
+    #[error("wallpaper feed is invalid: {0}")]
+    Feed(#[from] feed::FeedError),
+    #[error("cached data is unavailable: {0}")]
+    Cache(#[from] cache::CacheError),
+    #[error("could not save the image: {0}")]
+    SaveImage(#[source] io::Error),
+    #[error("downloaded data is not a supported image: {0}")]
+    DecodeImage(#[from] image::ImageError),
+    #[error(transparent)]
+    Platform(#[from] PlatformError),
+    #[error(transparent)]
+    Settings(#[from] SettingsError),
+    #[error("the wallpaper feed is empty")]
+    EmptyFeed,
+}
+
+pub async fn refresh_feed(
+    client: &reqwest::Client,
+    paths: &AppPaths,
+) -> Result<(Vec<WallpaperEntry>, FeedOrigin), ServiceError> {
+    let remote = async {
+        let markdown = client
+            .get(FEED_URL)
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+        let entries = feed::parse(&markdown)?;
+        cache::save_feed(paths, &entries)?;
+        Ok::<_, ServiceError>(entries)
+    }
+    .await;
+
+    match remote {
+        Ok(entries) => Ok((entries, FeedOrigin::Network)),
+        Err(_) => cache::load_feed(paths)
+            .map(|entries| (entries, FeedOrigin::Cache))
+            .map_err(ServiceError::Cache),
+    }
+}
+
+pub async fn ensure_image(
+    client: &reqwest::Client,
+    paths: &AppPaths,
+    entry: &WallpaperEntry,
+) -> Result<PathBuf, ServiceError> {
+    let destination = cache::image_path(paths, entry);
+    if destination.exists() && image::open(&destination).is_ok() {
+        return Ok(destination);
+    }
+
+    let bytes = client
+        .get(&entry.image_url)
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
+    image::load_from_memory(&bytes)?;
+    cache::write_image_atomically(&destination, &bytes).map_err(ServiceError::SaveImage)?;
+    Ok(destination)
+}
+
+pub async fn run_scheduled_update() -> Result<PathBuf, ServiceError> {
+    let paths = AppPaths::discover().map_err(|error| {
+        ServiceError::SaveImage(io::Error::other(format!(
+            "could not resolve paths: {error}"
+        )))
+    })?;
+    let mut settings = Settings::load(&paths.settings_file())?;
+    if !settings.daily_change {
+        return Err(ServiceError::SaveImage(io::Error::other(
+            "daily change is disabled",
+        )));
+    }
+    let desktop = Desktop::detect()?;
+    let client = reqwest::Client::new();
+    let (entries, _) = refresh_feed(&client, &paths).await?;
+    let current = entries.first().ok_or(ServiceError::EmptyFeed)?;
+    let image = ensure_image(&client, &paths, current).await?;
+    desktop.apply(&image)?;
+
+    settings.applied_image = Some(image.to_string_lossy().into_owned());
+    settings.last_update_status = Some(format!("Updated to {}", current.date));
+    settings.remember_image(&image);
+    settings.save(&paths.settings_file())?;
+    cache::prune_images(&paths, &settings)?;
+    Ok(image)
+}
+
+pub fn mark_failed_update(error: &ServiceError) {
+    let Ok(paths) = AppPaths::discover() else {
+        return;
+    };
+    let Ok(mut settings) = Settings::load(&paths.settings_file()) else {
+        return;
+    };
+    settings.last_update_status = Some(format!("Update failed: {error}"));
+    let _ = settings.save(&paths.settings_file());
+}
