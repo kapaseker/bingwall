@@ -1,0 +1,11 @@
+Package: bingwall
+Version: @VERSION@
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Bingwall contributors <noreply@example.invalid>
+Depends: libc6 (>= 2.39), libgcc-s1, libglib2.0-bin, dconf-gsettings-backend
+Installed-Size: @INSTALLED_SIZE@
+Description: Daily Bing wallpaper browser for GNOME and Cinnamon
+ Bingwall provides an Iced-based wallpaper preview pager and an optional
+ persistent systemd user timer that applies the newest feed image at 08:00.

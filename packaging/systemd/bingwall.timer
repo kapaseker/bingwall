@@ -1,0 +1,10 @@
+[Unit]
+Description=Change the Bingwall wallpaper every day at 08:00
+
+[Timer]
+OnCalendar=*-*-* 08:00:00
+Persistent=true
+Unit=bingwall.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Bingwall
+Comment=Browse and apply the daily Bing wallpaper
+Comment[zh_CN]=浏览并应用每日必应壁纸
+Exec=bingwall
+Terminal=false
+Categories=Utility;
+StartupNotify=true

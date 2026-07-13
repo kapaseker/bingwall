@@ -27,7 +27,9 @@ pub enum SystemdError {
 }
 
 pub fn enable(paths: &AppPaths) -> Result<(), SystemdError> {
-    install_units(paths)?;
+    if !Path::new("/usr/lib/systemd/user/bingwall.timer").exists() {
+        install_units(paths)?;
+    }
     systemctl(&["daemon-reload"])?;
     systemctl(&["enable", "--now", "bingwall.timer"])
 }

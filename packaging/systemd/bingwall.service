@@ -1,0 +1,7 @@
+[Unit]
+Description=Apply the current Bingwall wallpaper
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bingwall update
