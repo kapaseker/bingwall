@@ -41,4 +41,8 @@ impl AppPaths {
     pub fn images_dir(&self) -> PathBuf {
         self.cache_dir.join("images")
     }
+
+    pub fn previews_dir(&self) -> PathBuf {
+        self.cache_dir.join("previews-v1")
+    }
 }
