@@ -26,6 +26,8 @@ pub enum ServiceError {
     Cache(#[from] cache::CacheError),
     #[error("could not save the image: {0}")]
     SaveImage(#[source] io::Error),
+    #[error("could not resolve the user data directories: {0}")]
+    Paths(String),
     #[error("downloaded data is not a supported image: {0}")]
     DecodeImage(#[from] image::ImageError),
     #[error(transparent)]
@@ -34,6 +36,8 @@ pub enum ServiceError {
     Settings(#[from] SettingsError),
     #[error("the wallpaper feed is empty")]
     EmptyFeed,
+    #[error("daily change is disabled")]
+    DailyChangeDisabled,
 }
 
 pub async fn refresh_feed(
@@ -85,16 +89,10 @@ pub async fn ensure_image(
 }
 
 pub async fn run_scheduled_update() -> Result<PathBuf, ServiceError> {
-    let paths = AppPaths::discover().map_err(|error| {
-        ServiceError::SaveImage(io::Error::other(format!(
-            "could not resolve paths: {error}"
-        )))
-    })?;
+    let paths = AppPaths::discover().map_err(|error| ServiceError::Paths(error.to_string()))?;
     let mut settings = Settings::load(&paths.settings_file())?;
     if !settings.daily_change {
-        return Err(ServiceError::SaveImage(io::Error::other(
-            "daily change is disabled",
-        )));
+        return Err(ServiceError::DailyChangeDisabled);
     }
     let desktop = Desktop::detect()?;
     let client = reqwest::Client::new();
