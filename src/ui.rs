@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use iced::widget::{
     Space, Stack, button, column, container, image, pin, responsive, row, text, toggler,
 };
@@ -11,6 +9,9 @@ use crate::{
 };
 
 pub(crate) fn view(state: &State) -> Element<'_, Message> {
+    if state.initializing {
+        return loading_view(state);
+    }
     if state.desktop.is_none() {
         return unsupported_view(state);
     }
@@ -43,8 +44,7 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
         container(preview(state))
             .width(Fill)
             .height(Fill)
-            .clip(true)
-            .style(container::rounded_box),
+            .clip(true),
         container(next).center_y(Fill),
     ]
     .height(Fill)
@@ -52,7 +52,7 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
     .align_y(iced::Center);
 
     let details = selected_details(state);
-    let set_button = if state.images.contains_key(&state.selected) && !state.busy {
+    let set_button = if state.selected_preview_is_ready() && !state.busy {
         button(state.locale.text(TextKey::SetWallpaper))
             .style(button::primary)
             .on_press(Message::SetWallpaper)
@@ -83,6 +83,13 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
     .into()
 }
 
+fn loading_view(state: &State) -> Element<'_, Message> {
+    container(text(&state.status).size(18))
+        .padding(32)
+        .center(Fill)
+        .into()
+}
+
 fn unsupported_view(state: &State) -> Element<'_, Message> {
     container(
         column![text("Bingwall").size(30), text(&state.status).size(18)]
@@ -111,34 +118,52 @@ fn selected_details(state: &State) -> Element<'_, Message> {
 }
 
 fn preview(state: &State) -> Element<'_, Message> {
-    let current = state.images.get(&state.selected).cloned();
-    let Some(transition) = state.transition.as_ref() else {
-        return preview_image(current, state.locale);
-    };
-    let previous = state.images.get(&transition.from).cloned();
-    let progress = transition_progress(state);
-    let direction = transition.direction;
+    let current = state.preview_handle(state.selected);
+    let transition = state.transition.as_ref().map(|transition| {
+        (
+            state.preview_handle(transition.from),
+            transition_progress(state),
+            transition.direction,
+        )
+    });
     let locale = state.locale;
 
-    responsive(move |size| {
-        let old_x = -direction * progress * size.width;
-        let new_x = direction * (1.0 - progress) * size.width;
-        Stack::new()
-            .push(
-                pin(preview_image(previous.clone(), locale))
-                    .x(old_x)
-                    .width(size.width)
-                    .height(size.height),
-            )
-            .push(
-                pin(preview_image(current.clone(), locale))
-                    .x(new_x)
-                    .width(size.width)
-                    .height(size.height),
-            )
+    responsive(move |available| {
+        let width = available.width.min(available.height * 16.0 / 9.0);
+        let height = width * 9.0 / 16.0;
+        let content: Element<'static, Message> =
+            if let Some((previous, progress, direction)) = transition.clone() {
+                let old_x = -direction * progress * width;
+                let new_x = direction * (1.0 - progress) * width;
+                Stack::new()
+                    .push(
+                        pin(preview_image(previous, locale))
+                            .x(old_x)
+                            .width(width)
+                            .height(height),
+                    )
+                    .push(
+                        pin(preview_image(current.clone(), locale))
+                            .x(new_x)
+                            .width(width)
+                            .height(height),
+                    )
+                    .width(width)
+                    .height(height)
+                    .clip(true)
+                    .into()
+            } else {
+                preview_image(current.clone(), locale)
+            };
+        let frame = container(content)
+            .width(width)
+            .height(height)
+            .clip(true)
+            .style(container::rounded_box);
+        container(frame)
             .width(Fill)
             .height(Fill)
-            .clip(true)
+            .center(Fill)
             .into()
     })
     .width(Fill)
@@ -146,12 +171,15 @@ fn preview(state: &State) -> Element<'_, Message> {
     .into()
 }
 
-fn preview_image(path: Option<PathBuf>, locale: Locale) -> Element<'static, Message> {
-    match path {
-        Some(path) => image(path)
+fn preview_image(
+    handle: Option<iced::widget::image::Handle>,
+    locale: Locale,
+) -> Element<'static, Message> {
+    match handle {
+        Some(handle) => image(handle)
             .width(Fill)
             .height(Fill)
-            .content_fit(ContentFit::Contain)
+            .content_fit(ContentFit::Cover)
             .into(),
         None => container(text(locale.text(TextKey::LoadingPreview)))
             .width(Length::Fill)

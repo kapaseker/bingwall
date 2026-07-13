@@ -130,10 +130,23 @@ pub async fn ensure_preview(
 }
 
 async fn generate_preview(original: PathBuf, preview: PathBuf) -> Result<(), ServiceError> {
-    tokio::task::spawn_blocking(move || cache::generate_preview(&original, &preview))
-        .await
-        .map_err(|error| ServiceError::BackgroundTask(error.to_string()))??;
-    Ok(())
+    let mut attempt = 0;
+    loop {
+        let original = original.clone();
+        let preview = preview.clone();
+        let result =
+            tokio::task::spawn_blocking(move || cache::generate_preview(&original, &preview))
+                .await
+                .map_err(|error| ServiceError::BackgroundTask(error.to_string()))?;
+        match result {
+            Ok(()) => return Ok(()),
+            Err(_) if attempt < 2 => {
+                attempt += 1;
+                tokio::time::sleep(Duration::from_millis(200 * attempt)).await;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
 }
 
 async fn download_original(
@@ -237,8 +250,13 @@ mod tests {
             image_url: "https://127.0.0.1:9/cached.jpg".into(),
         };
         let image = cache::image_path(&paths, &entry);
+        let preview = cache::preview_path(&paths, &entry);
         std::fs::create_dir_all(paths.images_dir()).unwrap();
         image::DynamicImage::new_rgb8(1, 1).save(&image).unwrap();
+        std::fs::create_dir_all(paths.previews_dir()).unwrap();
+        image::DynamicImage::new_rgb8(cache::PREVIEW_WIDTH, cache::PREVIEW_HEIGHT)
+            .save(&preview)
+            .unwrap();
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let result = runtime
@@ -246,6 +264,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result, image);
+        assert_ne!(result, preview);
         assert!(image.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
