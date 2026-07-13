@@ -8,6 +8,7 @@ use crate::{
     locale::{Locale, TextKey},
 };
 
+/// Builds the application's current view from its state.
 pub(crate) fn view(state: &State) -> Element<'_, Message> {
     if state.initializing {
         return loading_view(state);
@@ -83,6 +84,7 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
     .into()
 }
 
+/// Builds the centered status view shown while startup is in progress.
 fn loading_view(state: &State) -> Element<'_, Message> {
     container(text(&state.status).size(18))
         .padding(32)
@@ -90,6 +92,7 @@ fn loading_view(state: &State) -> Element<'_, Message> {
         .into()
 }
 
+/// Builds the message shown when the current desktop is unsupported.
 fn unsupported_view(state: &State) -> Element<'_, Message> {
     container(
         column![text("Bingwall").size(30), text(&state.status).size(18)]
@@ -101,6 +104,7 @@ fn unsupported_view(state: &State) -> Element<'_, Message> {
     .into()
 }
 
+/// Builds the date, position, and description for the selected wallpaper.
 fn selected_details(state: &State) -> Element<'_, Message> {
     let Some(entry) = state.entries.get(state.selected) else {
         return text(state.locale.text(TextKey::LoadingFeed)).into();
@@ -117,6 +121,7 @@ fn selected_details(state: &State) -> Element<'_, Message> {
     .into()
 }
 
+/// Builds a responsive 16:9 preview with an optional slide transition.
 fn preview(state: &State) -> Element<'_, Message> {
     let current = state.preview_handle(state.selected);
     let transition = state.transition.as_ref().map(|transition| {
@@ -171,6 +176,7 @@ fn preview(state: &State) -> Element<'_, Message> {
     .into()
 }
 
+/// Displays an allocated image handle or a localized loading placeholder.
 fn preview_image(
     handle: Option<iced::widget::image::Handle>,
     locale: Locale,

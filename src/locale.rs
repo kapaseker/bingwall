@@ -28,6 +28,7 @@ pub enum TextKey {
 }
 
 impl Locale {
+    /// Detects the active locale from the standard locale environment variables.
     pub fn detect() -> Self {
         let value = env::var("LC_ALL")
             .or_else(|_| env::var("LC_MESSAGES"))
@@ -36,6 +37,7 @@ impl Locale {
         Self::from_name(&value)
     }
 
+    /// Maps a locale name to one of the translations supported by the application.
     pub fn from_name(value: &str) -> Self {
         if value.to_ascii_lowercase().starts_with("zh") {
             Self::SimplifiedChinese
@@ -44,6 +46,7 @@ impl Locale {
         }
     }
 
+    /// Returns the localized text for a user-interface message key.
     pub fn text(self, key: TextKey) -> &'static str {
         use TextKey::*;
         match (self, key) {
@@ -94,6 +97,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Verifies only locale names beginning with `zh` select Chinese text.
     fn selects_chinese_only_for_zh_locales() {
         assert_eq!(Locale::from_name("zh_CN.UTF-8"), Locale::SimplifiedChinese);
         assert_eq!(Locale::from_name("en_US.UTF-8"), Locale::English);

@@ -42,6 +42,7 @@ pub enum ServiceError {
     DailyChangeDisabled,
 }
 
+/// Fetches and caches the remote feed, falling back to the cached feed when refresh fails.
 pub async fn refresh_feed(
     client: &reqwest::Client,
     paths: &AppPaths,
@@ -68,6 +69,7 @@ pub async fn refresh_feed(
     }
 }
 
+/// Returns a valid cached original image or downloads and validates a replacement.
 pub async fn ensure_image(
     client: &reqwest::Client,
     paths: &AppPaths,
@@ -85,6 +87,7 @@ pub async fn ensure_image(
     download_original(client, paths, entry).await
 }
 
+/// Returns a valid cached preview or generates one from a cached or downloaded original.
 pub async fn ensure_preview(
     client: &reqwest::Client,
     paths: &AppPaths,
@@ -129,6 +132,7 @@ pub async fn ensure_preview(
     }
 }
 
+/// Generates a preview off the async runtime, retrying transient decoding failures.
 async fn generate_preview(original: PathBuf, preview: PathBuf) -> Result<(), ServiceError> {
     let mut attempt = 0;
     loop {
@@ -149,6 +153,7 @@ async fn generate_preview(original: PathBuf, preview: PathBuf) -> Result<(), Ser
     }
 }
 
+/// Downloads, validates, and atomically caches an entry's original image.
 async fn download_original(
     client: &reqwest::Client,
     paths: &AppPaths,
@@ -168,6 +173,7 @@ async fn download_original(
     Ok(destination)
 }
 
+/// Downloads bytes with bounded retries and increasing delays.
 async fn download_with_retry(
     client: &reqwest::Client,
     url: &str,
@@ -195,6 +201,7 @@ async fn download_with_retry(
     }
 }
 
+/// Applies the newest wallpaper and records the result for an enabled daily update.
 pub async fn run_scheduled_update() -> Result<PathBuf, ServiceError> {
     let paths = AppPaths::discover().map_err(|error| ServiceError::Paths(error.to_string()))?;
     let mut settings = Settings::load(&paths.settings_file())?;
@@ -214,6 +221,7 @@ pub async fn run_scheduled_update() -> Result<PathBuf, ServiceError> {
     Ok(image)
 }
 
+/// Best-effort records a scheduled-update failure in persisted settings.
 pub fn mark_failed_update(error: &ServiceError) {
     let Ok(paths) = AppPaths::discover() else {
         return;
@@ -232,6 +240,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Verifies a decodable cached original avoids a network request.
     fn valid_cached_image_is_used_without_downloading_again() {
         let root = std::env::temp_dir().join(format!(
             "bingwall-service-cache-{}",
@@ -270,6 +279,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies a cached original can produce a preview without network access.
     fn cached_original_generates_preview_without_network() {
         let root = std::env::temp_dir().join(format!(
             "bingwall-service-preview-{}",

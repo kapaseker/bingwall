@@ -20,6 +20,7 @@ pub enum PlatformError {
 }
 
 impl Desktop {
+    /// Detects a supported desktop from the current session environment.
     pub fn detect() -> Result<Self, PlatformError> {
         let value = env::var("XDG_CURRENT_DESKTOP")
             .or_else(|_| env::var("XDG_SESSION_DESKTOP"))
@@ -27,6 +28,7 @@ impl Desktop {
         Self::detect_from(&value).ok_or(PlatformError::UnsupportedDesktop)
     }
 
+    /// Recognizes GNOME or Cinnamon in a case-insensitive desktop identifier.
     pub fn detect_from(value: &str) -> Option<Self> {
         let normalized = value.to_ascii_lowercase();
         if normalized.split(':').any(|part| part.contains("cinnamon")) {
@@ -38,6 +40,7 @@ impl Desktop {
         }
     }
 
+    /// Applies a local image as the desktop wallpaper through the appropriate settings schema.
     pub fn apply(self, path: &Path) -> Result<(), PlatformError> {
         let uri = Url::from_file_path(path)
             .map_err(|_| PlatformError::InvalidWallpaperPath)?
@@ -55,6 +58,7 @@ impl Desktop {
     }
 }
 
+/// Runs a `gsettings set` command and converts command failures into platform errors.
 fn set_gsettings(schema: &str, key: &str, value: &str) -> Result<(), PlatformError> {
     let output = Command::new("gsettings")
         .args(["set", schema, key, value])
@@ -74,12 +78,14 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Verifies supported desktop identifiers are recognized regardless of case.
     fn detects_supported_desktops_case_insensitively() {
         assert_eq!(Desktop::detect_from("ubuntu:GNOME"), Some(Desktop::Gnome));
         assert_eq!(Desktop::detect_from("X-Cinnamon"), Some(Desktop::Cinnamon));
     }
 
     #[test]
+    /// Verifies unsupported desktop identifiers are rejected.
     fn rejects_other_desktops() {
         assert_eq!(Desktop::detect_from("KDE"), None);
         assert_eq!(Desktop::detect_from("XFCE"), None);

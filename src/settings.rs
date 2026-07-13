@@ -24,6 +24,7 @@ pub enum SettingsError {
 }
 
 impl Settings {
+    /// Loads settings from disk, returning safe defaults when the file does not exist.
     pub fn load(path: &Path) -> Result<Self, SettingsError> {
         match fs::read(path) {
             Ok(data) => serde_json::from_slice(&data).map_err(SettingsError::Parse),
@@ -32,6 +33,7 @@ impl Settings {
         }
     }
 
+    /// Serializes settings and atomically replaces the persisted settings file.
     pub fn save(&self, path: &Path) -> Result<(), SettingsError> {
         let parent = path.parent().expect("settings path has a parent");
         fs::create_dir_all(parent).map_err(SettingsError::Write)?;
@@ -49,6 +51,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Verifies a missing settings file produces disabled default settings.
     fn missing_settings_are_safe_and_disabled() {
         let path = std::env::temp_dir().join(format!(
             "bingwall-missing-{}.json",
@@ -63,6 +66,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies settings retain their values after being saved and loaded.
     fn settings_round_trip() {
         let root = std::env::temp_dir().join(format!(
             "bingwall-settings-{}",
@@ -85,6 +89,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies obsolete fields do not prevent older settings files from loading.
     fn legacy_recent_image_list_is_ignored() {
         let value = br#"{
             "daily_change": true,

@@ -26,6 +26,7 @@ pub enum SystemdError {
     Command(String),
 }
 
+/// Installs missing user units, reloads systemd, and enables the daily timer.
 pub fn enable(paths: &AppPaths) -> Result<(), SystemdError> {
     if !Path::new("/usr/lib/systemd/user/bingwall.timer").exists() {
         install_units(paths)?;
@@ -34,10 +35,12 @@ pub fn enable(paths: &AppPaths) -> Result<(), SystemdError> {
     systemctl(&["enable", "--now", "bingwall.timer"])
 }
 
+/// Disables and stops the daily user timer.
 pub fn disable() -> Result<(), SystemdError> {
     systemctl(&["disable", "--now", "bingwall.timer"])
 }
 
+/// Creates the service and timer units and copies them into the user systemd directory.
 fn install_units(paths: &AppPaths) -> Result<(), SystemdError> {
     let executable = std::env::current_exe().map_err(SystemdError::Executable)?;
     let unit_dir = paths.config_dir.join("systemd-user");
@@ -57,6 +60,7 @@ fn install_units(paths: &AppPaths) -> Result<(), SystemdError> {
     copy_unit(&unit_dir.join("bingwall.timer"), &systemd_dir)
 }
 
+/// Copies a generated unit file into the destination unit directory.
 fn copy_unit(source: &Path, destination_dir: &Path) -> Result<(), SystemdError> {
     let destination = destination_dir.join(source.file_name().expect("unit has a file name"));
     fs::copy(source, destination)
@@ -64,12 +68,14 @@ fn copy_unit(source: &Path, destination_dir: &Path) -> Result<(), SystemdError> 
         .map_err(SystemdError::Install)
 }
 
+/// Escapes an executable path for use as a systemd `ExecStart` token.
 fn escape_unit_path(path: &Path) -> String {
     path.to_string_lossy()
         .replace('\\', "\\\\")
         .replace(' ', "\\x20")
 }
 
+/// Runs a user-scoped systemctl command and reports stderr on failure.
 fn systemctl(arguments: &[&str]) -> Result<(), SystemdError> {
     let output = Command::new("systemctl")
         .arg("--user")
@@ -90,6 +96,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Verifies spaces in service executable paths use systemd hexadecimal escaping.
     fn escapes_spaces_in_service_executable_paths() {
         assert_eq!(
             escape_unit_path(Path::new("/home/me/Bing Wall/bingwall")),

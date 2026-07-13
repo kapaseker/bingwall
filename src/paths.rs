@@ -17,6 +17,7 @@ pub enum PathError {
 }
 
 impl AppPaths {
+    /// Resolves the per-user configuration and cache directories used by Bingwall.
     pub fn discover() -> Result<Self, PathError> {
         let config_dir = dirs::config_dir()
             .ok_or(PathError::MissingConfigDirectory)?
@@ -30,18 +31,22 @@ impl AppPaths {
         })
     }
 
+    /// Returns the path to the persisted user settings file.
     pub fn settings_file(&self) -> PathBuf {
         self.config_dir.join("settings.json")
     }
 
+    /// Returns the path to the cached wallpaper feed.
     pub fn feed_file(&self) -> PathBuf {
         self.cache_dir.join("feed.json")
     }
 
+    /// Returns the directory that stores full-resolution wallpaper images.
     pub fn images_dir(&self) -> PathBuf {
         self.cache_dir.join("images")
     }
 
+    /// Returns the versioned directory that stores generated previews.
     pub fn previews_dir(&self) -> PathBuf {
         self.cache_dir.join("previews-v1")
     }

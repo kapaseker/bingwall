@@ -29,11 +29,13 @@ pub enum CacheError {
     WriteFeed(#[source] io::Error),
 }
 
+/// Loads and deserializes the cached wallpaper feed.
 pub fn load_feed(paths: &AppPaths) -> Result<Vec<WallpaperEntry>, CacheError> {
     let data = fs::read(paths.feed_file()).map_err(CacheError::ReadFeed)?;
     serde_json::from_slice(&data).map_err(CacheError::DecodeFeed)
 }
 
+/// Serializes the wallpaper feed and replaces the cache file atomically.
 pub fn save_feed(paths: &AppPaths, entries: &[WallpaperEntry]) -> Result<(), CacheError> {
     fs::create_dir_all(&paths.cache_dir).map_err(CacheError::WriteFeed)?;
     let data = serde_json::to_vec(entries).map_err(CacheError::EncodeFeed)?;
@@ -43,25 +45,30 @@ pub fn save_feed(paths: &AppPaths, entries: &[WallpaperEntry]) -> Result<(), Cac
     fs::rename(temporary, destination).map_err(CacheError::WriteFeed)
 }
 
+/// Builds the stable cache path for an entry's original image.
 pub fn image_path(paths: &AppPaths, entry: &WallpaperEntry) -> PathBuf {
     hashed_image_path(paths.images_dir(), entry)
 }
 
+/// Builds the stable cache path for an entry's generated preview.
 pub fn preview_path(paths: &AppPaths, entry: &WallpaperEntry) -> PathBuf {
     hashed_image_path(paths.previews_dir(), entry)
 }
 
+/// Derives a deterministic JPEG filename from an entry's image URL.
 fn hashed_image_path(directory: PathBuf, entry: &WallpaperEntry) -> PathBuf {
     let mut hasher = DefaultHasher::new();
     entry.image_url.hash(&mut hasher);
     directory.join(format!("{:016x}.jpg", hasher.finish()))
 }
 
+/// Returns the cached original only when it exists and can be decoded.
 pub fn valid_image_path(paths: &AppPaths, entry: &WallpaperEntry) -> Option<PathBuf> {
     let path = image_path(paths, entry);
     (path.exists() && image::open(&path).is_ok()).then_some(path)
 }
 
+/// Returns a preview only when it has the expected dimensions, removing invalid files.
 pub fn valid_preview_path(paths: &AppPaths, entry: &WallpaperEntry) -> Option<PathBuf> {
     let path = preview_path(paths, entry);
     let dimensions = ImageReader::open(&path)
@@ -76,6 +83,7 @@ pub fn valid_preview_path(paths: &AppPaths, entry: &WallpaperEntry) -> Option<Pa
     }
 }
 
+/// Center-crops an original image to 16:9 and atomically writes a 1080p JPEG preview.
 pub fn generate_preview(original: &Path, destination: &Path) -> Result<(), image::ImageError> {
     let mut decoder = ImageReader::open(original)?
         .with_guessed_format()?
@@ -115,12 +123,14 @@ pub fn generate_preview(original: &Path, destination: &Path) -> Result<(), image
     result
 }
 
+/// Writes downloaded image bytes through a temporary file before replacing the destination.
 pub fn write_image_atomically(destination: &Path, data: &[u8]) -> Result<(), io::Error> {
     let temporary = prepare_atomic_write(destination)?;
     fs::write(&temporary, data)?;
     fs::rename(temporary, destination)
 }
 
+/// Creates the parent directory and returns a process-unique temporary path.
 fn prepare_atomic_write(destination: &Path) -> Result<PathBuf, io::Error> {
     let parent = destination.parent().expect("image path has a parent");
     fs::create_dir_all(parent)?;
@@ -134,6 +144,7 @@ mod tests {
 
     use super::*;
 
+    /// Creates isolated cache and configuration paths for a cache test.
     fn temporary_paths() -> AppPaths {
         let root = std::env::temp_dir().join(format!(
             "bingwall-cache-{}",
@@ -149,6 +160,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies feed persistence and deterministic, distinct image cache paths.
     fn feed_round_trips_and_image_names_are_stable() {
         let paths = temporary_paths();
         let entries = vec![WallpaperEntry {
@@ -172,6 +184,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies previews are center-cropped and encoded at the required resolution.
     fn preview_is_center_cropped_and_encoded_at_1080p() {
         let paths = temporary_paths();
         let entry = WallpaperEntry {
@@ -213,6 +226,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies incorrectly sized previews are rejected and deleted.
     fn invalid_preview_dimensions_are_rejected_and_removed() {
         let paths = temporary_paths();
         let entry = WallpaperEntry {

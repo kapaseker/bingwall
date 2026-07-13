@@ -59,6 +59,7 @@ pub(crate) struct State {
 }
 
 impl State {
+    /// Returns the allocated GPU image handle for an entry when it is ready.
     pub(crate) fn preview_handle(&self, index: usize) -> Option<image::Handle> {
         let image_url = &self.entries.get(index)?.image_url;
         self.preview_allocations
@@ -66,6 +67,7 @@ impl State {
             .map(|allocation| allocation.handle().clone())
     }
 
+    /// Reports whether the selected wallpaper has an allocated preview.
     pub(crate) fn selected_preview_is_ready(&self) -> bool {
         self.preview_handle(self.selected).is_some()
     }
@@ -101,6 +103,7 @@ pub(crate) enum Message {
     AnimationTick(Instant),
 }
 
+/// Configures and launches the Bingwall graphical application.
 pub fn run() -> iced::Result {
     iced::application(boot, update, ui::view)
         .title("Bingwall")
@@ -111,6 +114,7 @@ pub fn run() -> iced::Result {
         .run()
 }
 
+/// Creates the initial application state and starts background initialization.
 fn boot() -> (State, Task<Message>) {
     let locale = Locale::detect();
     let state = State {
@@ -150,6 +154,7 @@ fn boot() -> (State, Task<Message>) {
     (state, task)
 }
 
+/// Detects platform support and loads paths, settings, and any cached feed.
 fn load_startup() -> Result<Startup, String> {
     let Ok(desktop) = Desktop::detect() else {
         return Ok(Startup::Unsupported);
@@ -169,6 +174,7 @@ fn load_startup() -> Result<Startup, String> {
     })
 }
 
+/// Applies an application message to state and returns any resulting asynchronous work.
 fn update(state: &mut State, message: Message) -> Task<Message> {
     match message {
         Message::Initialized(result) => match result {
@@ -376,6 +382,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
     }
 }
 
+/// Starts a feed refresh and optionally places the interface in a blocking state.
 fn refresh_task(state: &mut State, blocking: bool) -> Task<Message> {
     let (Some(paths), Some(client)) = (state.paths.clone(), state.client.clone()) else {
         return Task::none();
@@ -394,6 +401,7 @@ fn refresh_task(state: &mut State, blocking: bool) -> Task<Message> {
     )
 }
 
+/// Prioritizes preview generation and GPU allocation around the current selection.
 fn schedule_previews(state: &mut State) -> Task<Message> {
     let (Some(paths), Some(client)) = (state.paths.clone(), state.client.clone()) else {
         return Task::none();
@@ -484,6 +492,7 @@ fn schedule_previews(state: &mut State) -> Task<Message> {
     Task::batch(tasks)
 }
 
+/// Returns unique entries to preload in navigation-priority order.
 fn desired_preview_entries(state: &State) -> Vec<WallpaperEntry> {
     let mut indices = Vec::with_capacity(GPU_PRELOAD_LIMIT);
     for index in [
@@ -505,6 +514,7 @@ fn desired_preview_entries(state: &State) -> Vec<WallpaperEntry> {
         .collect()
 }
 
+/// Returns the image URLs currently eligible for preview allocation.
 fn desired_preview_urls(state: &State) -> HashSet<String> {
     desired_preview_entries(state)
         .into_iter()
@@ -512,6 +522,7 @@ fn desired_preview_urls(state: &State) -> HashSet<String> {
         .collect()
 }
 
+/// Reports whether an image URL belongs to the selected entry.
 fn is_current_url(state: &State, image_url: &str) -> bool {
     state
         .entries
@@ -519,6 +530,7 @@ fn is_current_url(state: &State, image_url: &str) -> bool {
         .is_some_and(|entry| entry.image_url == image_url)
 }
 
+/// Moves the selection within bounds, extends the visible page, and starts a transition.
 fn navigate(state: &mut State, direction: isize) -> Task<Message> {
     if state.entries.is_empty() {
         return Task::none();
@@ -544,6 +556,7 @@ fn navigate(state: &mut State, direction: isize) -> Task<Message> {
     schedule_previews(state)
 }
 
+/// Starts the work needed to download and apply the selected wallpaper.
 fn apply_selected_task(state: &mut State) -> Task<Message> {
     let (Some(desktop), Some(paths), Some(entry)) = (
         state.desktop,
@@ -570,6 +583,7 @@ fn apply_selected_task(state: &mut State) -> Task<Message> {
     )
 }
 
+/// Starts the work needed to enable or disable automatic daily changes.
 fn toggle_daily_task(state: &mut State, enabled: bool) -> Task<Message> {
     let (Some(desktop), Some(paths)) = (state.desktop, state.paths.clone()) else {
         return Task::none();
@@ -590,6 +604,7 @@ fn toggle_daily_task(state: &mut State, enabled: bool) -> Task<Message> {
     )
 }
 
+/// Applies an image and persists the selected wallpaper metadata.
 fn apply_wallpaper(
     desktop: Desktop,
     paths: AppPaths,
@@ -606,6 +621,7 @@ fn apply_wallpaper(
     Ok(settings)
 }
 
+/// Updates the systemd timer, optionally applies today's image, and persists the setting.
 async fn set_daily_change(
     enabled: bool,
     desktop: Desktop,
@@ -652,6 +668,7 @@ async fn set_daily_change(
     .map_err(|error| error.to_string())?
 }
 
+/// Maps keyboard, wheel, and touch gestures to wallpaper navigation.
 fn handle_runtime_event(state: &mut State, event: iced::Event) -> Task<Message> {
     match event {
         iced::Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => match key.as_ref() {
@@ -702,6 +719,7 @@ fn handle_runtime_event(state: &mut State, event: iced::Event) -> Task<Message> 
     }
 }
 
+/// Subscribes to runtime events and animation ticks required by the current state.
 fn subscription(state: &State) -> Subscription<Message> {
     let events = iced::event::listen().map(Message::RuntimeEvent);
     if state.transition.is_some() {
@@ -714,6 +732,7 @@ fn subscription(state: &State) -> Subscription<Message> {
     }
 }
 
+/// Returns the selected-image transition's normalized elapsed progress.
 pub(crate) fn transition_progress(state: &State) -> f32 {
     state
         .transition
@@ -734,6 +753,7 @@ mod tests {
 
     use super::*;
 
+    /// Creates isolated cache and configuration paths for an application test.
     fn temporary_paths(label: &str) -> AppPaths {
         let root = std::env::temp_dir().join(format!(
             "bingwall-{label}-{}",
@@ -748,6 +768,7 @@ mod tests {
         }
     }
 
+    /// Builds a deterministic application state containing the requested number of entries.
     fn state_with_entries(count: usize) -> State {
         State {
             locale: Locale::English,
@@ -784,6 +805,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies navigation expands visible metadata in ten-entry batches.
     fn pager_loads_metadata_in_batches_of_ten() {
         let mut state = state_with_entries(25);
         for _ in 0..8 {
@@ -797,6 +819,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies navigation cannot move before the first or after the last entry.
     fn pager_never_moves_outside_the_feed() {
         let mut state = state_with_entries(2);
         let _ = navigate(&mut state, -1);
@@ -807,6 +830,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies startup exposes cached entries while a background refresh runs.
     fn initialization_populates_the_ui_from_cached_feed_before_refresh() {
         let paths = temporary_paths("local-first");
         let entries = state_with_entries(12).entries;
@@ -836,6 +860,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies an unchanged refresh keeps the current selection and loaded previews.
     fn unchanged_background_refresh_preserves_loaded_images_and_selection() {
         let mut state = state_with_entries(3);
         state.selected = 1;
@@ -858,6 +883,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies completed off-window previews remain cached without consuming GPU preload space.
     fn completed_old_feed_task_is_kept_without_entering_the_gpu_window() {
         let mut state = state_with_entries(1);
         let stale_url = "https://cn.bing.com/old.jpg".to_owned();
@@ -877,6 +903,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies queued preview work follows a changed selection without discarding prior work.
     fn queued_previews_are_reprioritized_without_being_cancelled() {
         let mut state = state_with_entries(6);
         state.selected = 2;
@@ -908,6 +935,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies GPU exhaustion reduces preloading and retries the selected preview only once.
     fn gpu_out_of_memory_reduces_preload_window_and_retries_current_once() {
         let mut state = state_with_entries(4);
         let current_url = state.entries[0].image_url.clone();

@@ -17,6 +17,7 @@ pub enum FeedError {
     NoEntries,
 }
 
+/// Extracts dated HTTPS wallpaper entries from the Markdown feed in source order.
 pub fn parse(markdown: &str) -> Result<Vec<WallpaperEntry>, FeedError> {
     static ENTRY: OnceLock<Regex> = OnceLock::new();
     let entry = ENTRY.get_or_init(|| {
@@ -45,6 +46,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Verifies valid entries and descriptions are parsed without reordering.
     fn parses_entries_in_feed_order() {
         let markdown = "## Bing Wallpaper 2026-01-02 | [Lake (© Person)](https://cn.bing.com/a.jpg) 2026-01-01 | [Hill](https://cn.bing.com/b.jpg)";
 
@@ -57,6 +59,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies a feed without HTTPS entries is rejected.
     fn rejects_non_https_and_empty_feeds() {
         assert_eq!(
             parse("2026-01-02 | [Lake](http://example.com/a.jpg)"),

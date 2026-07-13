@@ -1,5 +1,6 @@
 use std::process::ExitCode;
 
+/// Dispatches either the graphical application or the scheduled-update command.
 fn main() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
         Some("update") => run_update(),
@@ -17,6 +18,7 @@ fn main() -> ExitCode {
     }
 }
 
+/// Runs one scheduled wallpaper update in a Tokio runtime and maps the result to an exit code.
 fn run_update() -> ExitCode {
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
