@@ -7,10 +7,13 @@ fn main() -> ExitCode {
             eprintln!("Unknown command: {argument}\nUsage: bingwall [update]");
             ExitCode::FAILURE
         }
-        None => {
-            eprintln!("The Bingwall interface is not available in this build yet.");
-            ExitCode::FAILURE
-        }
+        None => match bingwall::app::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("Could not start Bingwall: {error}");
+                ExitCode::FAILURE
+            }
+        },
     }
 }
 
