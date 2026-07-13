@@ -174,7 +174,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             state.loading_images.remove(&index);
             match result {
                 Ok(path) => {
-                    state.images.insert(index, path);
+                    state.images.insert(index, path.clone());
+                    state.settings.remember_image(&path);
+                    if let Some(paths) = &state.paths
+                        && let Err(error) = state.settings.save(&paths.settings_file())
+                    {
+                        state.status = error.to_string();
+                    }
                 }
                 Err(error) if index == state.selected => state.status = error,
                 Err(_) => {}
@@ -499,5 +505,48 @@ mod tests {
         let _ = navigate(&mut state, 1);
         let _ = navigate(&mut state, 1);
         assert_eq!(state.selected, 1);
+    }
+
+    #[test]
+    fn downloaded_preview_is_recorded_for_cache_retention() {
+        let root =
+            std::env::temp_dir().join(format!("bingwall-preview-cache-{}", std::process::id()));
+        let paths = AppPaths {
+            config_dir: root.join("config"),
+            cache_dir: root.join("cache"),
+        };
+        let mut state = state_with_entries(2);
+        state.entries[1].image_url = "https://127.0.0.1:9/preview.jpg".into();
+        let image = cache::image_path(&paths, &state.entries[1]);
+        std::fs::create_dir_all(paths.images_dir()).unwrap();
+        image::DynamicImage::new_rgb8(1, 1).save(&image).unwrap();
+        state.paths = Some(paths.clone());
+
+        let _ = update(&mut state, Message::ImageLoaded(1, Ok(image.clone())));
+
+        assert!(
+            state
+                .settings
+                .recent_images
+                .contains(&image.to_string_lossy().into_owned())
+        );
+        let persisted = Settings::load(&paths.settings_file()).unwrap();
+        assert!(
+            persisted
+                .recent_images
+                .contains(&image.to_string_lossy().into_owned())
+        );
+        cache::prune_images(&paths, &persisted).unwrap();
+        assert!(image.exists());
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let cached = runtime
+            .block_on(service::ensure_image(
+                &reqwest::Client::new(),
+                &paths,
+                &state.entries[1],
+            ))
+            .unwrap();
+        assert_eq!(cached, image);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
