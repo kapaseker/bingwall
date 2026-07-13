@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     fs,
     hash::{DefaultHasher, Hash, Hasher},
     io,
@@ -8,7 +7,7 @@ use std::{
 
 use thiserror::Error;
 
-use crate::{feed::WallpaperEntry, paths::AppPaths, settings::Settings};
+use crate::{feed::WallpaperEntry, paths::AppPaths};
 
 #[derive(Debug, Error)]
 pub enum CacheError {
@@ -20,8 +19,6 @@ pub enum CacheError {
     EncodeFeed(#[source] serde_json::Error),
     #[error("could not write cached feed: {0}")]
     WriteFeed(#[source] io::Error),
-    #[error("could not clean the image cache: {0}")]
-    CleanImages(#[source] io::Error),
 }
 
 pub fn load_feed(paths: &AppPaths) -> Result<Vec<WallpaperEntry>, CacheError> {
@@ -46,29 +43,9 @@ pub fn image_path(paths: &AppPaths, entry: &WallpaperEntry) -> PathBuf {
         .join(format!("{:016x}.jpg", hasher.finish()))
 }
 
-pub fn prune_images(paths: &AppPaths, settings: &Settings) -> Result<(), CacheError> {
-    let images_dir = paths.images_dir();
-    let entries = match fs::read_dir(&images_dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(CacheError::CleanImages(error)),
-    };
-    let mut keep = settings
-        .recent_images
-        .iter()
-        .map(PathBuf::from)
-        .collect::<HashSet<_>>();
-    if let Some(applied) = &settings.applied_image {
-        keep.insert(PathBuf::from(applied));
-    }
-
-    for entry in entries {
-        let path = entry.map_err(CacheError::CleanImages)?.path();
-        if path.is_file() && !keep.contains(&path) {
-            fs::remove_file(path).map_err(CacheError::CleanImages)?;
-        }
-    }
-    Ok(())
+pub fn valid_image_path(paths: &AppPaths, entry: &WallpaperEntry) -> Option<PathBuf> {
+    let path = image_path(paths, entry);
+    (path.exists() && image::open(&path).is_ok()).then_some(path)
 }
 
 pub fn write_image_atomically(destination: &Path, data: &[u8]) -> Result<(), io::Error> {
@@ -115,30 +92,6 @@ mod tests {
             image_path(&paths, &entries[0])
         );
 
-        fs::remove_dir_all(paths.cache_dir.parent().unwrap()).unwrap();
-    }
-
-    #[test]
-    fn prune_preserves_applied_and_recent_images() {
-        let paths = temporary_paths();
-        fs::create_dir_all(paths.images_dir()).unwrap();
-        let applied = paths.images_dir().join("applied.jpg");
-        let recent = paths.images_dir().join("recent.jpg");
-        let old = paths.images_dir().join("old.jpg");
-        for path in [&applied, &recent, &old] {
-            fs::write(path, b"image").unwrap();
-        }
-        let settings = Settings {
-            applied_image: Some(applied.to_string_lossy().into_owned()),
-            recent_images: vec![recent.to_string_lossy().into_owned()],
-            ..Settings::default()
-        };
-
-        prune_images(&paths, &settings).unwrap();
-
-        assert!(applied.exists());
-        assert!(recent.exists());
-        assert!(!old.exists());
         fs::remove_dir_all(paths.cache_dir.parent().unwrap()).unwrap();
     }
 }

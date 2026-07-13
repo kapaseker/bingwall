@@ -38,7 +38,7 @@ pub(crate) struct State {
     pub visible_count: usize,
     pub selected: usize,
     pub images: HashMap<usize, PathBuf>,
-    loading_images: HashSet<usize>,
+    loading_images: HashSet<(usize, String)>,
     pub status: String,
     pub busy: bool,
     pub transition: Option<Transition>,
@@ -50,7 +50,7 @@ pub(crate) struct State {
 pub(crate) enum Message {
     Refresh,
     FeedLoaded(Result<(Vec<WallpaperEntry>, FeedOrigin), String>),
-    ImageLoaded(usize, Result<PathBuf, String>),
+    ImageLoaded(usize, String, Result<PathBuf, String>),
     Previous,
     Next,
     SetWallpaper,
@@ -121,42 +121,72 @@ fn boot() -> (State, Task<Message>) {
         }
     };
     let settings = Settings::load(&paths.settings_file()).unwrap_or_default();
+    boot_supported(
+        locale,
+        desktop.expect("desktop was checked"),
+        paths,
+        settings,
+    )
+}
+
+fn boot_supported(
+    locale: Locale,
+    desktop: Desktop,
+    paths: AppPaths,
+    settings: Settings,
+) -> (State, Task<Message>) {
+    let cached_entries = cache::load_feed(&paths)
+        .ok()
+        .filter(|entries| !entries.is_empty());
+    let has_cached_feed = cached_entries.is_some();
     let status = settings
         .last_update_status
         .clone()
         .unwrap_or_else(|| locale.text(TextKey::LoadingFeed).into());
     let mut state = State {
         locale,
-        desktop,
+        desktop: Some(desktop),
         paths: Some(paths),
         settings,
-        entries: Vec::new(),
+        entries: cached_entries.unwrap_or_default(),
         visible_count: 0,
         selected: 0,
         images: HashMap::new(),
         loading_images: HashSet::new(),
-        status,
-        busy: true,
+        status: if has_cached_feed {
+            locale.text(TextKey::CachedFeedRefreshing).into()
+        } else {
+            status
+        },
+        busy: !has_cached_feed,
         transition: None,
         last_wheel: None,
         touch_start: None,
     };
-    let task = refresh_task(&mut state);
+    state.visible_count = state.entries.len().min(PAGE_BATCH);
+    load_cached_neighbor_images(&mut state);
+    let image_task = queue_neighbor_images(&mut state);
+    let refresh_task = refresh_task(&mut state, !has_cached_feed);
+    let task = Task::batch([image_task, refresh_task]);
     (state, task)
 }
 
 fn update(state: &mut State, message: Message) -> Task<Message> {
     match message {
-        Message::Refresh => refresh_task(state),
+        Message::Refresh => refresh_task(state, true),
         Message::FeedLoaded(result) => {
             state.busy = false;
             match result {
                 Ok((entries, origin)) => {
-                    state.entries = entries;
-                    state.selected = 0;
-                    state.visible_count = state.entries.len().min(PAGE_BATCH);
-                    state.images.clear();
-                    state.loading_images.clear();
+                    let feed_changed = state.entries != entries;
+                    if feed_changed {
+                        state.entries = entries;
+                        state.selected = 0;
+                        state.visible_count = state.entries.len().min(PAGE_BATCH);
+                        state.images.clear();
+                        state.loading_images.clear();
+                        load_cached_neighbor_images(state);
+                    }
                     state.status = match origin {
                         FeedOrigin::Network => state.locale.text(TextKey::FeedRefreshed),
                         FeedOrigin::Cache => state.locale.text(TextKey::CachedFeed),
@@ -170,17 +200,18 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
             }
         }
-        Message::ImageLoaded(index, result) => {
-            state.loading_images.remove(&index);
+        Message::ImageLoaded(index, image_url, result) => {
+            state.loading_images.remove(&(index, image_url.clone()));
+            if state
+                .entries
+                .get(index)
+                .is_none_or(|entry| entry.image_url != image_url)
+            {
+                return Task::none();
+            }
             match result {
                 Ok(path) => {
-                    state.images.insert(index, path.clone());
-                    state.settings.remember_image(&path);
-                    if let Some(paths) = &state.paths
-                        && let Err(error) = state.settings.save(&paths.settings_file())
-                    {
-                        state.status = error.to_string();
-                    }
+                    state.images.insert(index, path);
                 }
                 Err(error) if index == state.selected => state.status = error,
                 Err(_) => {}
@@ -235,12 +266,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
     }
 }
 
-fn refresh_task(state: &mut State) -> Task<Message> {
+fn refresh_task(state: &mut State, blocking: bool) -> Task<Message> {
     let Some(paths) = state.paths.clone() else {
         return Task::none();
     };
-    state.busy = true;
-    state.status = state.locale.text(TextKey::LoadingFeed).into();
+    if blocking {
+        state.busy = true;
+        state.status = state.locale.text(TextKey::LoadingFeed).into();
+    }
     Task::perform(
         async move {
             service::refresh_feed(&reqwest::Client::new(), &paths)
@@ -255,11 +288,17 @@ fn queue_neighbor_images(state: &mut State) -> Task<Message> {
     let Some(paths) = state.paths.clone() else {
         return Task::none();
     };
+    if state.entries.is_empty() {
+        return Task::none();
+    }
     let start = state.selected.saturating_sub(1);
     let end = (state.selected + 1).min(state.entries.len().saturating_sub(1));
     let mut tasks = Vec::new();
     for index in start..=end {
-        if state.images.contains_key(&index) || !state.loading_images.insert(index) {
+        let image_url = state.entries[index].image_url.clone();
+        if state.images.contains_key(&index)
+            || !state.loading_images.insert((index, image_url.clone()))
+        {
             continue;
         }
         let entry = state.entries[index].clone();
@@ -270,10 +309,26 @@ fn queue_neighbor_images(state: &mut State) -> Task<Message> {
                     .await
                     .map_err(|error| error.to_string())
             },
-            move |result| Message::ImageLoaded(index, result),
+            move |result| Message::ImageLoaded(index, image_url.clone(), result),
         ));
     }
     Task::batch(tasks)
+}
+
+fn load_cached_neighbor_images(state: &mut State) {
+    let Some(paths) = state.paths.as_ref() else {
+        return;
+    };
+    if state.entries.is_empty() {
+        return;
+    }
+    let start = state.selected.saturating_sub(1);
+    let end = (state.selected + 1).min(state.entries.len() - 1);
+    for index in start..=end {
+        if let Some(path) = cache::valid_image_path(paths, &state.entries[index]) {
+            state.images.insert(index, path);
+        }
+    }
 }
 
 fn navigate(state: &mut State, direction: isize) -> Task<Message> {
@@ -341,11 +396,9 @@ fn apply_wallpaper(
     let mut settings = Settings::load(&paths.settings_file()).map_err(|error| error.to_string())?;
     settings.applied_image = Some(image.to_string_lossy().into_owned());
     settings.last_update_status = Some(format!("Updated to {}", entry.date));
-    settings.remember_image(&image);
     settings
         .save(&paths.settings_file())
         .map_err(|error| error.to_string())?;
-    cache::prune_images(&paths, &settings).map_err(|error| error.to_string())?;
     Ok(settings)
 }
 
@@ -365,7 +418,6 @@ async fn set_daily_change(
         systemd::enable(&paths).map_err(|error| error.to_string())?;
         settings.applied_image = Some(image.to_string_lossy().into_owned());
         settings.last_update_status = Some(format!("Updated to {}", entry.date));
-        settings.remember_image(&image);
         Some(image)
     } else {
         systemd::disable().map_err(|error| error.to_string())?;
@@ -375,7 +427,6 @@ async fn set_daily_change(
     settings
         .save(&paths.settings_file())
         .map_err(|error| error.to_string())?;
-    cache::prune_images(&paths, &settings).map_err(|error| error.to_string())?;
     Ok((settings, image))
 }
 
@@ -457,7 +508,23 @@ pub(crate) fn transition_progress(state: &State) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::*;
+
+    fn temporary_paths(label: &str) -> AppPaths {
+        let root = std::env::temp_dir().join(format!(
+            "bingwall-{label}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        AppPaths {
+            config_dir: root.join("config"),
+            cache_dir: root.join("cache"),
+        }
+    }
 
     fn state_with_entries(count: usize) -> State {
         State {
@@ -508,45 +575,63 @@ mod tests {
     }
 
     #[test]
-    fn downloaded_preview_is_recorded_for_cache_retention() {
-        let root =
-            std::env::temp_dir().join(format!("bingwall-preview-cache-{}", std::process::id()));
-        let paths = AppPaths {
-            config_dir: root.join("config"),
-            cache_dir: root.join("cache"),
-        };
-        let mut state = state_with_entries(2);
-        state.entries[1].image_url = "https://127.0.0.1:9/preview.jpg".into();
-        let image = cache::image_path(&paths, &state.entries[1]);
+    fn startup_populates_the_ui_from_cached_feed_before_refresh() {
+        let paths = temporary_paths("local-first");
+        let entries = state_with_entries(12).entries;
+        cache::save_feed(&paths, &entries).unwrap();
+        let cached_image = cache::image_path(&paths, &entries[0]);
         std::fs::create_dir_all(paths.images_dir()).unwrap();
-        image::DynamicImage::new_rgb8(1, 1).save(&image).unwrap();
-        state.paths = Some(paths.clone());
-
-        let _ = update(&mut state, Message::ImageLoaded(1, Ok(image.clone())));
-
-        assert!(
-            state
-                .settings
-                .recent_images
-                .contains(&image.to_string_lossy().into_owned())
-        );
-        let persisted = Settings::load(&paths.settings_file()).unwrap();
-        assert!(
-            persisted
-                .recent_images
-                .contains(&image.to_string_lossy().into_owned())
-        );
-        cache::prune_images(&paths, &persisted).unwrap();
-        assert!(image.exists());
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let cached = runtime
-            .block_on(service::ensure_image(
-                &reqwest::Client::new(),
-                &paths,
-                &state.entries[1],
-            ))
+        image::DynamicImage::new_rgb8(1, 1)
+            .save(&cached_image)
             .unwrap();
-        assert_eq!(cached, image);
-        std::fs::remove_dir_all(root).unwrap();
+
+        let (state, _task) = boot_supported(
+            Locale::SimplifiedChinese,
+            Desktop::Gnome,
+            paths.clone(),
+            Settings::default(),
+        );
+
+        assert_eq!(state.entries, entries);
+        assert_eq!(state.visible_count, PAGE_BATCH);
+        assert_eq!(state.selected, 0);
+        assert_eq!(state.images.get(&0), Some(&cached_image));
+        assert!(!state.busy);
+        assert_eq!(
+            state.status,
+            Locale::SimplifiedChinese.text(TextKey::CachedFeedRefreshing)
+        );
+        std::fs::remove_dir_all(paths.cache_dir.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn unchanged_background_refresh_preserves_loaded_images_and_selection() {
+        let mut state = state_with_entries(3);
+        state.selected = 1;
+        state.images.insert(1, PathBuf::from("cached.jpg"));
+        let entries = state.entries.clone();
+
+        let _ = update(
+            &mut state,
+            Message::FeedLoaded(Ok((entries, FeedOrigin::Network))),
+        );
+
+        assert_eq!(state.selected, 1);
+        assert_eq!(state.images.get(&1), Some(&PathBuf::from("cached.jpg")));
+    }
+
+    #[test]
+    fn stale_image_result_is_ignored_after_feed_changes() {
+        let mut state = state_with_entries(1);
+        let stale_url = "https://cn.bing.com/old.jpg".to_owned();
+        state.loading_images.insert((0, stale_url.clone()));
+
+        let _ = update(
+            &mut state,
+            Message::ImageLoaded(0, stale_url, Ok(PathBuf::from("old.jpg"))),
+        );
+
+        assert!(state.images.is_empty());
+        assert!(state.loading_images.is_empty());
     }
 }

@@ -71,10 +71,10 @@ pub async fn ensure_image(
     paths: &AppPaths,
     entry: &WallpaperEntry,
 ) -> Result<PathBuf, ServiceError> {
-    let destination = cache::image_path(paths, entry);
-    if destination.exists() && image::open(&destination).is_ok() {
-        return Ok(destination);
+    if let Some(cached) = cache::valid_image_path(paths, entry) {
+        return Ok(cached);
     }
+    let destination = cache::image_path(paths, entry);
 
     let bytes = client
         .get(&entry.image_url)
@@ -103,9 +103,7 @@ pub async fn run_scheduled_update() -> Result<PathBuf, ServiceError> {
 
     settings.applied_image = Some(image.to_string_lossy().into_owned());
     settings.last_update_status = Some(format!("Updated to {}", current.date));
-    settings.remember_image(&image);
     settings.save(&paths.settings_file())?;
-    cache::prune_images(&paths, &settings)?;
     Ok(image)
 }
 
@@ -118,4 +116,43 @@ pub fn mark_failed_update(error: &ServiceError) {
     };
     settings.last_update_status = Some(format!("Update failed: {error}"));
     let _ = settings.save(&paths.settings_file());
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    #[test]
+    fn valid_cached_image_is_used_without_downloading_again() {
+        let root = std::env::temp_dir().join(format!(
+            "bingwall-service-cache-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = AppPaths {
+            config_dir: root.join("config"),
+            cache_dir: root.join("cache"),
+        };
+        let entry = WallpaperEntry {
+            date: "2026-01-01".into(),
+            description: "Cached image".into(),
+            image_url: "https://127.0.0.1:9/cached.jpg".into(),
+        };
+        let image = cache::image_path(&paths, &entry);
+        std::fs::create_dir_all(paths.images_dir()).unwrap();
+        image::DynamicImage::new_rgb8(1, 1).save(&image).unwrap();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime
+            .block_on(ensure_image(&reqwest::Client::new(), &paths, &entry))
+            .unwrap();
+
+        assert_eq!(result, image);
+        assert!(image.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

@@ -9,7 +9,6 @@ pub struct Settings {
     pub daily_change: bool,
     pub applied_image: Option<String>,
     pub last_update_status: Option<String>,
-    pub recent_images: Vec<String>,
 }
 
 #[derive(Debug, Error)]
@@ -40,13 +39,6 @@ impl Settings {
         let temporary = path.with_extension("json.tmp");
         fs::write(&temporary, data).map_err(SettingsError::Write)?;
         fs::rename(temporary, path).map_err(SettingsError::Write)
-    }
-
-    pub fn remember_image(&mut self, path: &Path) {
-        let path = path.to_string_lossy().into_owned();
-        self.recent_images.retain(|recent| recent != &path);
-        self.recent_images.insert(0, path);
-        self.recent_images.truncate(20);
     }
 }
 
@@ -84,7 +76,6 @@ mod tests {
             daily_change: true,
             applied_image: Some("wall.jpg".into()),
             last_update_status: Some("ok".into()),
-            recent_images: vec!["recent.jpg".into()],
         };
 
         settings.save(&path).unwrap();
@@ -94,22 +85,18 @@ mod tests {
     }
 
     #[test]
-    fn keeps_twenty_unique_recent_images() {
-        let mut settings = Settings::default();
-        for index in 0..25 {
-            settings.remember_image(Path::new(&format!("{index}.jpg")));
-        }
-        settings.remember_image(Path::new("20.jpg"));
+    fn legacy_recent_image_list_is_ignored() {
+        let value = br#"{
+            "daily_change": true,
+            "applied_image": "wall.jpg",
+            "last_update_status": "ok",
+            "recent_images": ["old.jpg"]
+        }"#;
 
-        assert_eq!(settings.recent_images.len(), 20);
-        assert_eq!(settings.recent_images[0], "20.jpg");
-        assert_eq!(
-            settings
-                .recent_images
-                .iter()
-                .filter(|path| *path == "20.jpg")
-                .count(),
-            1
-        );
+        let settings: Settings = serde_json::from_slice(value).unwrap();
+
+        assert!(settings.daily_change);
+        assert_eq!(settings.applied_image.as_deref(), Some("wall.jpg"));
+        assert_eq!(settings.last_update_status.as_deref(), Some("ok"));
     }
 }

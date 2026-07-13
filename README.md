@@ -18,7 +18,8 @@ On other desktops, Bingwall shows only an unsupported-platform message and perfo
 - Manual **Set as wallpaper** action independent of automation
 - **Daily change** toggle that is off on first launch
 - Persistent systemd user timer at 08:00; a missed run executes after the next login or wake
-- Cached-feed fallback and retention of the applied image plus 20 recently used images
+- Cached feed shown immediately at startup while a refresh runs in the background
+- Downloaded wallpapers are reused from local storage and kept permanently
 - GNOME and Cinnamon wallpaper application in zoom/fill mode
 
 ## Run from source
@@ -52,5 +53,7 @@ The resulting package is written to `dist/`. Installing the package does not ena
 - Settings: `${XDG_CONFIG_HOME:-~/.config}/bingwall/settings.json`
 - Cached feed and images: `${XDG_CACHE_HOME:-~/.cache}/bingwall/`
 - Logs for scheduled runs: `journalctl --user -u bingwall.service`
+
+Downloaded wallpaper files are not evicted automatically. They remain in the cache until the cache directory is removed manually; an in-app cache clearing control is planned for a later release.
 
 Wallpaper descriptions and attribution are displayed exactly as provided by the external feed. Bingwall does not collect analytics or telemetry.
