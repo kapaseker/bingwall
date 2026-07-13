@@ -182,7 +182,17 @@ mod tests {
         let original = image_path(&paths, &entry);
         let preview = preview_path(&paths, &entry);
         fs::create_dir_all(paths.images_dir()).unwrap();
-        DynamicImage::new_rgb8(1200, 1600).save(&original).unwrap();
+        let mut source = image::RgbImage::new(160, 160);
+        for (_x, y, pixel) in source.enumerate_pixels_mut() {
+            *pixel = if y < 35 {
+                image::Rgb([255, 0, 0])
+            } else if y >= 125 {
+                image::Rgb([0, 0, 255])
+            } else {
+                image::Rgb([0, 255, 0])
+            };
+        }
+        source.save(&original).unwrap();
 
         generate_preview(&original, &preview).unwrap();
 
@@ -194,6 +204,11 @@ mod tests {
             (PREVIEW_WIDTH, PREVIEW_HEIGHT)
         );
         assert_eq!(valid_preview_path(&paths, &entry), Some(preview));
+        let decoded = image::open(preview_path(&paths, &entry)).unwrap().to_rgb8();
+        for y in [20, PREVIEW_HEIGHT / 2, PREVIEW_HEIGHT - 20] {
+            let pixel = decoded.get_pixel(PREVIEW_WIDTH / 2, y);
+            assert!(pixel[1] > pixel[0] && pixel[1] > pixel[2]);
+        }
         fs::remove_dir_all(paths.cache_dir.parent().unwrap()).unwrap();
     }
 
