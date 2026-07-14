@@ -1,10 +1,11 @@
 # Image assets
 
-Place real image files in this directory, then map them from
-`../values/images.properties` using a path relative to `assets/resources`:
+Place image files directly in this directory. Each filename stem becomes the
+generated resource key:
 
-```properties
-refresh=file:images/refresh.svg
+```rust
+image!(ic_left) // assets/resources/images/ic_left.svg
 ```
 
-The build validates the path and embeds the file bytes in the executable.
+Supported extensions are SVG, PNG, JPEG, GIF, WebP, BMP, and ICO. The build
+validates each filename and embeds the file bytes in the executable.

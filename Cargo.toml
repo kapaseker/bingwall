@@ -6,7 +6,7 @@ build = "build.rs"
 
 [dependencies]
 dirs = "6"
-iced = { version = "0.14", features = ["advanced", "image", "tokio"] }
+iced = { version = "0.14", features = ["advanced", "image", "svg", "tokio"] }
 image = "0.25"
 regex = "1"
 reqwest = "0.13"

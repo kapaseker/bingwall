@@ -29,6 +29,6 @@ mod generated_resource_macro_tests {
         assert_eq!(color!(surface_fallback), iced::Color::from_rgb8(18, 18, 18));
         assert_eq!(dimension!(toggle_size), 22.0);
         assert_eq!(dimension!(text_label), 16.0);
-        assert_eq!(image!(previous).placeholder(), "‹");
+        assert_eq!(image!(ic_left).path(), "images/ic_left.svg");
     }
 }

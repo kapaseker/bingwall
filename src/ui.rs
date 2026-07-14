@@ -1,6 +1,6 @@
 use iced::widget::{
     Space, Stack, button, column, container, image as iced_image, mouse_area, responsive, row,
-    text as iced_text, toggler,
+    svg as iced_svg, text as iced_text, toggler,
 };
 use iced::{ContentFit, Element, Fill, Length, Padding, Size};
 
@@ -153,29 +153,38 @@ fn top_controls(state: &State) -> Element<'_, Message> {
         .into()
 }
 
-/// Builds the previous and next placeholder buttons centered on the window edges.
+/// Builds the previous and next icon buttons centered on the window edges.
 fn navigation_controls(state: &State) -> Element<'_, Message> {
     let motion_idle = state.transition.is_none();
-    let previous =
-        button(iced_text(image!(previous).placeholder()).size(dimension!(text_navigation_icon)))
-            .padding([
-                dimension!(navigation_button_padding_vertical),
-                dimension!(navigation_button_padding_horizontal),
-            ])
-            .style(theme::edge_navigation)
-            .on_press_maybe(
-                (state.selected > 0 && !state.busy && motion_idle).then_some(Message::Previous),
-            );
-    let next = button(iced_text(image!(next).placeholder()).size(dimension!(text_navigation_icon)))
-        .padding([
-            dimension!(navigation_button_padding_vertical),
-            dimension!(navigation_button_padding_horizontal),
-        ])
-        .style(theme::edge_navigation)
-        .on_press_maybe(
-            (state.selected + 1 < state.entries.len() && !state.busy && motion_idle)
-                .then_some(Message::Next),
-        );
+    let previous = button(
+        iced_svg(image!(ic_left).svg_handle())
+            .width(dimension!(navigation_icon_size))
+            .height(dimension!(navigation_icon_size))
+            .style(theme::navigation_icon),
+    )
+    .padding([
+        dimension!(navigation_button_padding_vertical),
+        dimension!(navigation_button_padding_horizontal),
+    ])
+    .style(theme::edge_navigation)
+    .on_press_maybe(
+        (state.selected > 0 && !state.busy && motion_idle).then_some(Message::Previous),
+    );
+    let next = button(
+        iced_svg(image!(ic_right).svg_handle())
+            .width(dimension!(navigation_icon_size))
+            .height(dimension!(navigation_icon_size))
+            .style(theme::navigation_icon),
+    )
+    .padding([
+        dimension!(navigation_button_padding_vertical),
+        dimension!(navigation_button_padding_horizontal),
+    ])
+    .style(theme::edge_navigation)
+    .on_press_maybe(
+        (state.selected + 1 < state.entries.len() && !state.busy && motion_idle)
+            .then_some(Message::Next),
+    );
 
     container(
         row![previous, Space::new().width(Fill), next]

@@ -1,4 +1,4 @@
-use iced::widget::button;
+use iced::widget::{button, svg};
 use iced::{Background, Theme};
 
 /// Uses Iced's primary button treatment for the main wallpaper action.
@@ -9,6 +9,13 @@ pub(crate) fn primary_action(theme: &Theme, status: button::Status) -> button::S
 /// Uses Iced's secondary button treatment for the refresh action.
 pub(crate) fn secondary_action(theme: &Theme, status: button::Status) -> button::Style {
     button::secondary(theme, status)
+}
+
+/// Colors symbolic navigation SVGs for legibility over wallpaper images.
+pub(crate) fn navigation_icon(_theme: &Theme, _status: svg::Status) -> svg::Style {
+    svg::Style {
+        color: Some(color!(text_on_image)),
+    }
 }
 
 /// Paints compact translucent navigation buttons over the wallpaper image.
@@ -52,5 +59,9 @@ mod tests {
             Some(Background::Color(Color::from_rgba8(0, 0, 0, 0.18)))
         );
         assert_eq!(active.border.radius, 6.0.into());
+        assert_eq!(
+            navigation_icon(&theme, svg::Status::Idle).color,
+            Some(Color::WHITE)
+        );
     }
 }
