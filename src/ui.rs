@@ -1,10 +1,7 @@
-use std::f32::consts::PI;
-
-use iced::gradient;
 use iced::widget::{
     Space, Stack, button, column, container, image, mouse_area, responsive, row, text, toggler,
 };
-use iced::{Background, Color, ContentFit, Element, Fill, Length, Padding, Size, Theme};
+use iced::{ContentFit, Element, Fill, Length, Padding, Size};
 
 mod translated;
 
@@ -12,16 +9,18 @@ use translated::translate_x;
 
 use crate::{
     app::{BASE_WIDTH, Message, State, transition_offset},
-    locale::{Locale, TextKey},
+    resources::{AppTheme, DimensionToken, IconId, ResourceContext, TextKey, TextSizeToken},
+    theme,
 };
 
 /// Builds the application's current view from its state.
 pub(crate) fn view(state: &State) -> Element<'_, Message> {
+    let resources = ResourceContext::new(state.locale, AppTheme::Dark, 1.0, 1.0);
     if state.initializing {
-        return loading_view(state);
+        return loading_view(state, resources);
     }
     if state.desktop.is_none() {
-        return unsupported_view(state);
+        return unsupported_view(state, resources);
     }
 
     responsive(move |available| immersive_view(state, available))
@@ -33,8 +32,9 @@ pub(crate) fn view(state: &State) -> Element<'_, Message> {
 /// Builds the full-bleed wallpaper view and its floating controls.
 fn immersive_view(state: &State, available: Size) -> Element<'_, Message> {
     let scale = (available.width / BASE_WIDTH).max(1.0);
-    let background = pager_background(state, available);
-    let controls = controls(state, scale);
+    let resources = ResourceContext::new(state.locale, AppTheme::Dark, scale, scale);
+    let background = pager_background(state, available, resources);
+    let controls = controls(state, resources);
 
     Stack::new()
         .push(background)
@@ -45,39 +45,42 @@ fn immersive_view(state: &State, available: Size) -> Element<'_, Message> {
 }
 
 /// Builds the centered status view shown while startup is in progress.
-fn loading_view(state: &State) -> Element<'_, Message> {
-    container(text(&state.status).size(18))
-        .padding(32)
+fn loading_view(state: &State, resources: ResourceContext) -> Element<'_, Message> {
+    container(text(&state.status).size(resources.text_size(TextSizeToken::Standalone)))
+        .padding(resources.dimension(DimensionToken::StandalonePadding))
         .center(Fill)
-        .style(dark_background)
+        .style(move |iced_theme| theme::fallback_background(resources, iced_theme))
         .into()
 }
 
 /// Builds the message shown when the current desktop is unsupported.
-fn unsupported_view(state: &State) -> Element<'_, Message> {
-    container(text(&state.status).size(18))
-        .padding(32)
+fn unsupported_view(state: &State, resources: ResourceContext) -> Element<'_, Message> {
+    container(text(&state.status).size(resources.text_size(TextSizeToken::Standalone)))
+        .padding(resources.dimension(DimensionToken::StandalonePadding))
         .center(Fill)
-        .style(dark_background)
+        .style(move |iced_theme| theme::fallback_background(resources, iced_theme))
         .into()
 }
 
 /// Builds the selected wallpaper and its adjacent page at full-window size.
-fn pager_background(state: &State, available: Size) -> Element<'_, Message> {
+fn pager_background(
+    state: &State,
+    available: Size,
+    resources: ResourceContext,
+) -> Element<'_, Message> {
     let width = available.width.max(1.0);
     let height = available.height.max(1.0);
     let offset = transition_offset(state);
     let (center, neighbor) = visible_pages(state, offset);
-    let locale = state.locale;
 
     let mut pages = Stack::new().push(translated_page(
-        preview_image(state.preview_handle(center), locale),
+        preview_image(state.preview_handle(center), resources),
         offset * width,
     ));
     if let Some(neighbor) = neighbor {
         let direction = if neighbor > center { 1.0 } else { -1.0 };
         pages = pages.push(translated_page(
-            preview_image(state.preview_handle(neighbor), locale),
+            preview_image(state.preview_handle(neighbor), resources),
             (offset + direction) * width,
         ));
     }
@@ -120,10 +123,10 @@ fn visible_pages(state: &State, offset: f32) -> (usize, Option<usize>) {
 }
 
 /// Builds the top setting, edge navigation, and bottom metadata overlays.
-fn controls(state: &State, scale: f32) -> Element<'_, Message> {
-    let top = top_controls(state, scale);
-    let arrows = navigation_controls(state, scale);
-    let bottom = bottom_controls(state, scale);
+fn controls(state: &State, resources: ResourceContext) -> Element<'_, Message> {
+    let top = top_controls(state, resources);
+    let arrows = navigation_controls(state, resources);
+    let bottom = bottom_controls(state, resources);
 
     Stack::new()
         .push(
@@ -138,45 +141,62 @@ fn controls(state: &State, scale: f32) -> Element<'_, Message> {
 }
 
 /// Builds the title-free top overlay containing only the daily-change setting.
-fn top_controls(state: &State, scale: f32) -> Element<'_, Message> {
+fn top_controls(state: &State, resources: ResourceContext) -> Element<'_, Message> {
     let daily_toggle = toggler(state.settings.daily_change)
-        .label(state.locale.text(TextKey::DailyChange))
-        .size(22.0 * scale)
-        .text_size(16.0 * scale)
-        .spacing(10.0 * scale)
+        .label(resources.text(TextKey::DailyChange))
+        .size(resources.dimension(DimensionToken::ToggleSize))
+        .text_size(resources.text_size(TextSizeToken::Label))
+        .spacing(resources.dimension(DimensionToken::ToggleSpacing))
         .on_toggle_maybe((!state.busy).then_some(Message::ToggleDaily));
 
     container(row![Space::new().width(Fill), daily_toggle].align_y(iced::Center))
-        .padding([24.0 * scale, 32.0 * scale])
+        .padding([
+            resources.dimension(DimensionToken::TopPaddingVertical),
+            resources.dimension(DimensionToken::TopPaddingHorizontal),
+        ])
         .width(Fill)
-        .height(104.0 * scale)
-        .style(top_gradient)
+        .height(resources.dimension(DimensionToken::TopOverlayHeight))
+        .style(move |iced_theme| theme::top_scrim(resources, iced_theme))
         .into()
 }
 
-/// Builds the previous and next buttons centered on the window edges.
-fn navigation_controls(state: &State, scale: f32) -> Element<'_, Message> {
+/// Builds the previous and next placeholder buttons centered on the window edges.
+fn navigation_controls(state: &State, resources: ResourceContext) -> Element<'_, Message> {
     let motion_idle = state.transition.is_none();
-    let previous = button(text("‹").size(38.0 * scale))
-        .padding([8.0 * scale, 16.0 * scale])
-        .style(edge_button)
-        .on_press_maybe(
-            (state.selected > 0 && !state.busy && motion_idle).then_some(Message::Previous),
-        );
-    let next = button(text("›").size(38.0 * scale))
-        .padding([8.0 * scale, 16.0 * scale])
-        .style(edge_button)
-        .on_press_maybe(
-            (state.selected + 1 < state.entries.len() && !state.busy && motion_idle)
-                .then_some(Message::Next),
-        );
+    let previous = button(
+        text(resources.icon(IconId::Previous))
+            .size(resources.text_size(TextSizeToken::NavigationIcon)),
+    )
+    .padding([
+        resources.dimension(DimensionToken::NavigationButtonPaddingVertical),
+        resources.dimension(DimensionToken::NavigationButtonPaddingHorizontal),
+    ])
+    .style(move |iced_theme, status| theme::edge_navigation(resources, iced_theme, status))
+    .on_press_maybe(
+        (state.selected > 0 && !state.busy && motion_idle).then_some(Message::Previous),
+    );
+    let next = button(
+        text(resources.icon(IconId::Next)).size(resources.text_size(TextSizeToken::NavigationIcon)),
+    )
+    .padding([
+        resources.dimension(DimensionToken::NavigationButtonPaddingVertical),
+        resources.dimension(DimensionToken::NavigationButtonPaddingHorizontal),
+    ])
+    .style(move |iced_theme, status| theme::edge_navigation(resources, iced_theme, status))
+    .on_press_maybe(
+        (state.selected + 1 < state.entries.len() && !state.busy && motion_idle)
+            .then_some(Message::Next),
+    );
 
     container(
         row![previous, Space::new().width(Fill), next]
-            .spacing(16.0 * scale)
+            .spacing(resources.dimension(DimensionToken::NavigationSpacing))
             .align_y(iced::Center),
     )
-    .padding([0.0, 24.0 * scale])
+    .padding([
+        0.0,
+        resources.dimension(DimensionToken::NavigationHorizontalInset),
+    ])
     .width(Fill)
     .height(Fill)
     .center_y(Fill)
@@ -184,61 +204,76 @@ fn navigation_controls(state: &State, scale: f32) -> Element<'_, Message> {
 }
 
 /// Builds the metadata, actions, and status overlay at the bottom of the image.
-fn bottom_controls(state: &State, scale: f32) -> Element<'_, Message> {
-    let details = selected_details(state, scale);
-    let set_button = button(text(state.locale.text(TextKey::SetWallpaper)).size(16.0 * scale))
-        .padding([10.0 * scale, 16.0 * scale])
-        .style(button::primary)
-        .on_press_maybe(
-            (state.selected_preview_is_ready() && !state.busy).then_some(Message::SetWallpaper),
-        );
-    let refresh_button = button(text(state.locale.text(TextKey::Refresh)).size(16.0 * scale))
-        .padding([10.0 * scale, 16.0 * scale])
-        .style(button::secondary)
-        .on_press_maybe((!state.busy).then_some(Message::Refresh));
+fn bottom_controls(state: &State, resources: ResourceContext) -> Element<'_, Message> {
+    let details = selected_details(state, resources);
+    let set_button = button(
+        text(resources.text(TextKey::SetWallpaper)).size(resources.text_size(TextSizeToken::Label)),
+    )
+    .padding([
+        resources.dimension(DimensionToken::ActionButtonPaddingVertical),
+        resources.dimension(DimensionToken::ActionButtonPaddingHorizontal),
+    ])
+    .style(theme::primary_action)
+    .on_press_maybe(
+        (state.selected_preview_is_ready() && !state.busy).then_some(Message::SetWallpaper),
+    );
+    let refresh_button = button(
+        text(resources.text(TextKey::Refresh)).size(resources.text_size(TextSizeToken::Label)),
+    )
+    .padding([
+        resources.dimension(DimensionToken::ActionButtonPaddingVertical),
+        resources.dimension(DimensionToken::ActionButtonPaddingHorizontal),
+    ])
+    .style(theme::secondary_action)
+    .on_press_maybe((!state.busy).then_some(Message::Refresh));
 
     container(
         column![
             details,
-            row![set_button, refresh_button].spacing(12.0 * scale),
-            text(&state.status).size(14.0 * scale)
+            row![set_button, refresh_button]
+                .spacing(resources.dimension(DimensionToken::ActionSpacing)),
+            text(&state.status).size(resources.text_size(TextSizeToken::Status))
         ]
-        .spacing(12.0 * scale),
+        .spacing(resources.dimension(DimensionToken::ActionSpacing)),
     )
     .padding(Padding {
-        top: 48.0 * scale,
-        right: 32.0 * scale,
-        bottom: 24.0 * scale,
-        left: 32.0 * scale,
+        top: resources.dimension(DimensionToken::BottomPaddingTop),
+        right: resources.dimension(DimensionToken::BottomPaddingHorizontal),
+        bottom: resources.dimension(DimensionToken::BottomPaddingBottom),
+        left: resources.dimension(DimensionToken::BottomPaddingHorizontal),
     })
     .width(Fill)
-    .style(bottom_gradient)
+    .style(move |iced_theme| theme::bottom_scrim(resources, iced_theme))
     .into()
 }
 
 /// Builds the date, position, and description for the selected wallpaper.
-fn selected_details(state: &State, scale: f32) -> Element<'_, Message> {
+fn selected_details(state: &State, resources: ResourceContext) -> Element<'_, Message> {
     let Some(entry) = state.entries.get(state.selected) else {
-        return text(state.locale.text(TextKey::LoadingFeed))
-            .size(16.0 * scale)
+        return text(resources.text(TextKey::LoadingFeed))
+            .size(resources.text_size(TextSizeToken::Loading))
             .into();
     };
     column![
         row![
-            text(&entry.date).size(16.0 * scale),
+            text(&entry.date).size(resources.text_size(TextSizeToken::Label)),
             Space::new().width(Fill),
-            text(format!("{} / {}", state.selected + 1, state.entries.len())).size(14.0 * scale),
+            text(resources.text(TextKey::PageCounter {
+                current: state.selected + 1,
+                total: state.entries.len(),
+            }))
+            .size(resources.text_size(TextSizeToken::Counter)),
         ],
-        text(&entry.description).size(20.0 * scale),
+        text(&entry.description).size(resources.text_size(TextSizeToken::Description)),
     ]
-    .spacing(6.0 * scale)
+    .spacing(resources.dimension(DimensionToken::MetadataSpacing))
     .into()
 }
 
 /// Displays an allocated image handle or a localized full-window loading placeholder.
 fn preview_image(
     handle: Option<iced::widget::image::Handle>,
-    locale: Locale,
+    resources: ResourceContext,
 ) -> Element<'static, Message> {
     match handle {
         Some(handle) => image(handle)
@@ -246,62 +281,11 @@ fn preview_image(
             .height(Fill)
             .content_fit(ContentFit::Cover)
             .into(),
-        None => container(text(locale.text(TextKey::LoadingPreview)))
+        None => container(text(resources.text(TextKey::LoadingPreview)))
             .width(Length::Fill)
             .height(Length::Fill)
             .center(Fill)
-            .style(dark_background)
+            .style(move |iced_theme| theme::fallback_background(resources, iced_theme))
             .into(),
     }
-}
-
-/// Paints a dark fallback behind loading and unsupported states.
-fn dark_background(_theme: &Theme) -> container::Style {
-    container::Style {
-        text_color: Some(Color::WHITE),
-        background: Some(Background::Color(Color::from_rgb8(18, 18, 18))),
-        ..container::Style::default()
-    }
-}
-
-/// Paints a top-to-transparent scrim behind the daily-change setting.
-fn top_gradient(_theme: &Theme) -> container::Style {
-    container::Style {
-        text_color: Some(Color::WHITE),
-        background: Some(
-            gradient::Linear::new(PI)
-                .add_stop(0.0, Color::from_rgba8(0, 0, 0, 0.72))
-                .add_stop(1.0, Color::TRANSPARENT)
-                .into(),
-        ),
-        ..container::Style::default()
-    }
-}
-
-/// Paints a transparent-to-bottom scrim behind metadata and actions.
-fn bottom_gradient(_theme: &Theme) -> container::Style {
-    container::Style {
-        text_color: Some(Color::WHITE),
-        background: Some(
-            gradient::Linear::new(PI)
-                .add_stop(0.0, Color::TRANSPARENT)
-                .add_stop(0.45, Color::from_rgba8(0, 0, 0, 0.42))
-                .add_stop(1.0, Color::from_rgba8(0, 0, 0, 0.82))
-                .into(),
-        ),
-        ..container::Style::default()
-    }
-}
-
-/// Paints compact translucent navigation buttons over the image.
-fn edge_button(theme: &Theme, status: button::Status) -> button::Style {
-    let mut style = button::secondary(theme, status);
-    style.text_color = Color::WHITE;
-    style.background = Some(Background::Color(match status {
-        button::Status::Hovered => Color::from_rgba8(0, 0, 0, 0.72),
-        button::Status::Disabled => Color::from_rgba8(0, 0, 0, 0.18),
-        button::Status::Active | button::Status::Pressed => Color::from_rgba8(0, 0, 0, 0.52),
-    }));
-    style.border.radius = 6.0.into();
-    style
 }

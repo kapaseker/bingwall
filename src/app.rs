@@ -9,9 +9,9 @@ use iced::{Point, Size, Subscription, Task, event, keyboard, mouse, touch, widge
 use crate::{
     cache,
     feed::WallpaperEntry,
-    locale::{Locale, TextKey},
     paths::AppPaths,
     platform::Desktop,
+    resources::{Locale, TextKey},
     service::{self, FeedOrigin},
     settings::Settings,
     systemd, ui,
