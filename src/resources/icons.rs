@@ -1,5 +1,3 @@
-use super::{ImageKey, generated_image};
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageResource {
     Placeholder(&'static str),
@@ -21,19 +19,14 @@ impl ImageResource {
     }
 }
 
-/// Resolves a generated image key to its configured source declaration.
-pub(super) fn resolve_image(key: ImageKey) -> ImageResource {
-    generated_image(key)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::resources::generated_images;
 
     #[test]
-    /// Keeps navigation images as configured placeholders until assets are supplied.
+    /// Keeps navigation images as generated placeholders until assets are supplied.
     fn navigation_images_use_configured_placeholders() {
-        assert_eq!(resolve_image(ImageKey::previous).placeholder(), "‹");
-        assert_eq!(resolve_image(ImageKey::next).placeholder(), "›");
+        assert_eq!(generated_images::previous.placeholder(), "‹");
+        assert_eq!(generated_images::next.placeholder(), "›");
     }
 }

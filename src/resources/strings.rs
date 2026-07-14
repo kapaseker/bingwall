@@ -1,11 +1,104 @@
-use std::{borrow::Cow, env};
+use std::{
+    borrow::Cow,
+    env,
+    sync::{LazyLock, RwLock},
+};
 
-use super::{TextKey, generated_text_template};
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Locale {
     English,
     SimplifiedChinese,
+}
+
+#[derive(Debug)]
+struct LocaleStore {
+    locale: RwLock<Locale>,
+}
+
+impl LocaleStore {
+    /// Creates an independently owned locale store.
+    fn new(locale: Locale) -> Self {
+        Self {
+            locale: RwLock::new(locale),
+        }
+    }
+
+    /// Returns the current locale while recovering a poisoned read lock.
+    fn current(&self) -> Locale {
+        *self
+            .locale
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Replaces the current locale while recovering a poisoned write lock.
+    fn set(&self, locale: Locale) {
+        *self
+            .locale
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = locale;
+    }
+}
+
+static CURRENT_LOCALE: LazyLock<LocaleStore> = LazyLock::new(|| LocaleStore::new(Locale::detect()));
+
+#[cfg(test)]
+static LOCALE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+/// Serializes tests that mutate the application-wide locale.
+pub(crate) fn lock_locale_tests() -> MutexGuard<'static, ()> {
+    LOCALE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Returns the application-wide locale used by generated text resources.
+pub fn current_locale() -> Locale {
+    CURRENT_LOCALE.current()
+}
+
+/// Changes the application-wide locale used by generated text resources.
+pub fn set_locale(locale: Locale) {
+    CURRENT_LOCALE.set(locale);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextResource {
+    default: &'static str,
+    simplified_chinese: Option<&'static str>,
+}
+
+impl TextResource {
+    /// Creates a compile-time localized text descriptor with an optional Chinese override.
+    pub(crate) const fn new(
+        default: &'static str,
+        simplified_chinese: Option<&'static str>,
+    ) -> Self {
+        Self {
+            default,
+            simplified_chinese,
+        }
+    }
+
+    /// Resolves this descriptor using the application-wide locale.
+    pub(crate) fn resolve(self, arguments: &[(&str, String)]) -> Cow<'static, str> {
+        resolve_text(current_locale(), self, arguments)
+    }
+
+    /// Selects the localized template and falls back to the default when absent.
+    fn template(self, locale: Locale) -> &'static str {
+        match locale {
+            Locale::English => self.default,
+            Locale::SimplifiedChinese => self.simplified_chinese.unwrap_or(self.default),
+        }
+    }
 }
 
 impl Locale {
@@ -26,18 +119,19 @@ impl Locale {
             Self::English
         }
     }
+}
 
-    /// Resolves a generated static text key without formatting arguments.
-    pub fn text(self, key: TextKey) -> Cow<'static, str> {
-        format_template(generated_text_template(self, key), &[])
-    }
+/// Resolves and formats a generated text descriptor for an explicit locale.
+fn resolve_text(
+    locale: Locale,
+    resource: TextResource,
+    arguments: &[(&str, String)],
+) -> Cow<'static, str> {
+    format_template(resource.template(locale), arguments)
 }
 
 /// Substitutes named values into a generated localized template.
-pub(super) fn format_template(
-    template: &'static str,
-    arguments: &[(&str, String)],
-) -> Cow<'static, str> {
+fn format_template(template: &'static str, arguments: &[(&str, String)]) -> Cow<'static, str> {
     if arguments.is_empty() {
         return Cow::Borrowed(template);
     }
@@ -65,6 +159,7 @@ pub(super) fn format_template(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resources::generated_text;
 
     #[test]
     /// Verifies only locale names beginning with `zh` select Chinese text.
@@ -77,7 +172,7 @@ mod tests {
     /// Verifies a missing Chinese entry falls back to the default language template.
     fn missing_translation_falls_back_to_default_language() {
         assert_eq!(
-            generated_text_template(Locale::SimplifiedChinese, TextKey::page_counter),
+            generated_text::page_counter.template(Locale::SimplifiedChinese),
             "{current} / {total}"
         );
     }
@@ -86,11 +181,22 @@ mod tests {
     /// Formats generated placeholders with values supplied by the resource macro.
     fn formats_generated_text_arguments() {
         assert_eq!(
-            format_template(
-                "{current} / {total}",
+            resolve_text(
+                Locale::English,
+                generated_text::page_counter,
                 &[("current", "3".into()), ("total", "10".into())]
             ),
             "3 / 10"
         );
+    }
+
+    #[test]
+    /// Verifies an isolated locale store supports runtime language changes.
+    fn locale_store_switches_language_at_runtime() {
+        let store = LocaleStore::new(Locale::English);
+        assert_eq!(store.current(), Locale::English);
+
+        store.set(Locale::SimplifiedChinese);
+        assert_eq!(store.current(), Locale::SimplifiedChinese);
     }
 }

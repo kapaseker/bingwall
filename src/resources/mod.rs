@@ -1,12 +1,13 @@
 mod colors;
-mod context;
 mod dimensions;
 mod icons;
 mod strings;
 
-pub use context::{AppTheme, ResourceContext};
-pub use dimensions::DimensionScale;
+pub use colors::ColorResource;
+pub use dimensions::DimensionResource;
 pub use icons::ImageResource;
-pub use strings::Locale;
+#[cfg(test)]
+pub(crate) use strings::lock_locale_tests;
+pub use strings::{Locale, TextResource, current_locale, set_locale};
 
 include!(concat!(env!("OUT_DIR"), "/resources_generated.rs"));

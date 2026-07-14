@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
     time::{Duration, Instant},
@@ -11,7 +12,7 @@ use crate::{
     feed::WallpaperEntry,
     paths::AppPaths,
     platform::Desktop,
-    resources::{Locale, TextKey},
+    resources::{Locale, TextResource, current_locale, generated_text as texts, set_locale},
     service::{self, FeedOrigin},
     settings::Settings,
     systemd, ui,
@@ -48,9 +49,36 @@ struct PagerDrag {
     velocity: f32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StatusText {
+    Localized(TextResource),
+    Raw(String),
+}
+
+impl StatusText {
+    /// Creates a status that resolves a text resource using the current locale.
+    fn localized(resource: TextResource) -> Self {
+        Self::Localized(resource)
+    }
+
+    /// Resolves the status for display without translating external error text.
+    pub(crate) fn resolve(&self) -> Cow<'_, str> {
+        match self {
+            Self::Localized(resource) => resource.resolve(&[]),
+            Self::Raw(text) => Cow::Borrowed(text),
+        }
+    }
+}
+
+impl From<String> for StatusText {
+    /// Preserves an externally produced status string without translating it.
+    fn from(value: String) -> Self {
+        Self::Raw(value)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct State {
-    pub locale: Locale,
     pub initializing: bool,
     pub desktop: Option<Desktop>,
     pub paths: Option<AppPaths>,
@@ -69,8 +97,10 @@ pub(crate) struct State {
     invalidated_previews: HashSet<String>,
     gpu_preload_limit: usize,
     retried_current_allocation: HashSet<String>,
-    pub status: String,
+    pub status: StatusText,
     pub busy: bool,
+    locale_save_in_flight: bool,
+    locale_save_pending: bool,
     pub transition: Option<Transition>,
     pub pager_offset: f32,
     pager_drag: Option<PagerDrag>,
@@ -123,6 +153,9 @@ pub(crate) enum Message {
     Applied(Result<Settings, String>),
     ToggleDaily(bool),
     ToggleFinished(bool, Result<Settings, String>),
+    #[allow(dead_code)]
+    SetLocale(Locale),
+    LocaleSaved(Result<(), String>),
     RuntimeEvent(iced::Event),
     CapturedTouchEvent(iced::Event),
     WindowResized(window::Id, Size),
@@ -150,8 +183,8 @@ pub fn run() -> iced::Result {
 /// Creates the initial application state and starts background initialization.
 fn boot() -> (State, Task<Message>) {
     let locale = Locale::detect();
+    set_locale(locale);
     let state = State {
-        locale,
         initializing: true,
         desktop: None,
         paths: None,
@@ -170,8 +203,10 @@ fn boot() -> (State, Task<Message>) {
         invalidated_previews: HashSet::new(),
         gpu_preload_limit: GPU_PRELOAD_LIMIT,
         retried_current_allocation: HashSet::new(),
-        status: locale.text(TextKey::loading_feed).into(),
+        status: StatusText::localized(texts::loading_feed),
         busy: true,
+        locale_save_in_flight: false,
+        locale_save_pending: false,
         transition: None,
         pager_offset: 0.0,
         pager_drag: None,
@@ -220,7 +255,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             Ok(Startup::Unsupported) => {
                 state.initializing = false;
                 state.busy = false;
-                state.status = state.locale.text(TextKey::unsupported).into();
+                state.status = StatusText::localized(texts::unsupported);
                 Task::none()
             }
             Ok(Startup::Supported {
@@ -231,6 +266,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 cached_entries,
             }) => {
                 let has_cached_feed = !cached_entries.is_empty();
+                set_locale(settings.locale.unwrap_or_else(current_locale));
                 state.initializing = false;
                 state.desktop = Some(desktop);
                 state.paths = Some(paths);
@@ -240,13 +276,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 state.visible_count = state.entries.len().min(PAGE_BATCH);
                 state.busy = !has_cached_feed;
                 state.status = if has_cached_feed {
-                    state.locale.text(TextKey::cached_feed_refreshing).into()
+                    StatusText::localized(texts::cached_feed_refreshing)
                 } else {
                     state
                         .settings
                         .last_update_status
                         .clone()
-                        .unwrap_or_else(|| state.locale.text(TextKey::loading_feed).into())
+                        .map(StatusText::from)
+                        .unwrap_or_else(|| StatusText::localized(texts::loading_feed))
                 };
                 Task::batch([
                     schedule_previews(state),
@@ -256,7 +293,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             Err(error) => {
                 state.initializing = false;
                 state.busy = false;
-                state.status = error;
+                state.status = error.into();
                 Task::none()
             }
         },
@@ -274,15 +311,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         state.selected = 0;
                         state.visible_count = state.entries.len().min(PAGE_BATCH);
                     }
-                    state.status = match origin {
-                        FeedOrigin::Network => state.locale.text(TextKey::feed_refreshed),
-                        FeedOrigin::Cache => state.locale.text(TextKey::cached_feed),
-                    }
-                    .into();
+                    state.status = StatusText::localized(match origin {
+                        FeedOrigin::Network => texts::feed_refreshed,
+                        FeedOrigin::Cache => texts::cached_feed,
+                    });
                     schedule_previews(state)
                 }
                 Err(error) => {
-                    state.status = error;
+                    state.status = error.into();
                     Task::none()
                 }
             }
@@ -298,7 +334,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 Err(error) => {
                     state.failed_previews.insert(image_url.clone());
                     if is_current_url(state, &image_url) {
-                        state.status = error;
+                        state.status = error.into();
                     }
                 }
             }
@@ -318,7 +354,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     {
                         state.failed_allocations.insert(image_url.clone());
                         if is_current_url(state, &image_url) {
-                            state.status = image::Error::OutOfMemory.to_string();
+                            state.status = image::Error::OutOfMemory.to_string().into();
                         }
                     }
                 }
@@ -349,13 +385,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     }
                     state.failed_allocations.insert(image_url.clone());
                     if is_current_url(state, &image_url) {
-                        state.status = error.to_string();
+                        state.status = error.to_string().into();
                     }
                 }
                 Err(error) => {
                     state.failed_allocations.insert(image_url.clone());
                     if is_current_url(state, &image_url) {
-                        state.status = error.to_string();
+                        state.status = error.to_string().into();
                     }
                 }
             }
@@ -370,7 +406,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 Err(error) => {
                     state.failed_previews.insert(image_url.clone());
                     if is_current_url(state, &image_url) {
-                        state.status = error;
+                        state.status = error.into();
                     }
                 }
             }
@@ -383,10 +419,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             state.busy = false;
             match result {
                 Ok(settings) => {
-                    state.settings = settings;
-                    state.status = state.locale.text(TextKey::applied).into();
+                    let locale_changed = merge_settings_preserving_locale(state, settings);
+                    state.status = StatusText::localized(texts::applied);
+                    if locale_changed {
+                        return persist_locale_task(state);
+                    }
                 }
-                Err(error) => state.status = error,
+                Err(error) => state.status = error.into(),
             }
             Task::none()
         }
@@ -395,17 +434,33 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             state.busy = false;
             match result {
                 Ok(settings) => {
-                    state.settings = settings;
-                    state.status = state
-                        .locale
-                        .text(if enabled {
-                            TextKey::enabled
-                        } else {
-                            TextKey::disabled
-                        })
-                        .into();
+                    let locale_changed = merge_settings_preserving_locale(state, settings);
+                    state.status = StatusText::localized(if enabled {
+                        texts::enabled
+                    } else {
+                        texts::disabled
+                    });
+                    if locale_changed {
+                        return persist_locale_task(state);
+                    }
                 }
-                Err(error) => state.status = error,
+                Err(error) => state.status = error.into(),
+            }
+            Task::none()
+        }
+        Message::SetLocale(locale) => {
+            set_locale(locale);
+            state.settings.locale = Some(locale);
+            persist_locale_task(state)
+        }
+        Message::LocaleSaved(result) => {
+            state.locale_save_in_flight = false;
+            if state.locale_save_pending {
+                state.locale_save_pending = false;
+                return persist_locale_task(state);
+            }
+            if let Err(error) = result {
+                state.status = error.into();
             }
             Task::none()
         }
@@ -438,6 +493,37 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
     }
 }
 
+/// Merges asynchronously returned settings without losing the latest language choice.
+fn merge_settings_preserving_locale(state: &mut State, mut settings: Settings) -> bool {
+    let locale = state.settings.locale;
+    let locale_changed = settings.locale != locale;
+    settings.locale = locale;
+    state.settings = settings;
+    locale_changed
+}
+
+/// Serializes persistence of the current language choice so the latest selection wins.
+fn persist_locale_task(state: &mut State) -> Task<Message> {
+    if state.locale_save_in_flight {
+        state.locale_save_pending = true;
+        return Task::none();
+    }
+    let Some(paths) = state.paths.clone() else {
+        return Task::none();
+    };
+    let settings = state.settings.clone();
+    state.locale_save_in_flight = true;
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || settings.save(&paths.settings_file()))
+                .await
+                .map_err(|error| error.to_string())?
+                .map_err(|error| error.to_string())
+        },
+        Message::LocaleSaved,
+    )
+}
+
 /// Starts a feed refresh and optionally places the interface in a blocking state.
 fn refresh_task(state: &mut State, blocking: bool) -> Task<Message> {
     let (Some(paths), Some(client)) = (state.paths.clone(), state.client.clone()) else {
@@ -445,7 +531,7 @@ fn refresh_task(state: &mut State, blocking: bool) -> Task<Message> {
     };
     if blocking {
         state.busy = true;
-        state.status = state.locale.text(TextKey::loading_feed).into();
+        state.status = StatusText::localized(texts::loading_feed);
     }
     Task::perform(
         async move {
@@ -716,7 +802,7 @@ fn apply_selected_task(state: &mut State) -> Task<Message> {
         return Task::none();
     };
     state.busy = true;
-    state.status = state.locale.text(TextKey::working).into();
+    state.status = StatusText::localized(texts::working);
     Task::perform(
         async move {
             let image = service::ensure_image(&client, &paths, &entry)
@@ -740,11 +826,11 @@ fn toggle_daily_task(state: &mut State, enabled: bool) -> Task<Message> {
     };
     let current = state.entries.first().cloned();
     if enabled && current.is_none() {
-        state.status = state.locale.text(TextKey::loading_feed).into();
+        state.status = StatusText::localized(texts::loading_feed);
         return Task::none();
     }
     state.busy = true;
-    state.status = state.locale.text(TextKey::working).into();
+    state.status = StatusText::localized(texts::working);
     Task::perform(
         async move { set_daily_change(enabled, desktop, paths, current, client).await },
         move |result| Message::ToggleFinished(enabled, result),
@@ -1002,7 +1088,6 @@ mod tests {
     /// Builds a deterministic application state containing the requested number of entries.
     fn state_with_entries(count: usize) -> State {
         State {
-            locale: Locale::English,
             initializing: false,
             desktop: Some(Desktop::Gnome),
             paths: None,
@@ -1027,8 +1112,10 @@ mod tests {
             invalidated_previews: HashSet::new(),
             gpu_preload_limit: GPU_PRELOAD_LIMIT,
             retried_current_allocation: HashSet::new(),
-            status: String::new(),
+            status: StatusText::Raw(String::new()),
             busy: false,
+            locale_save_in_flight: false,
+            locale_save_pending: false,
             transition: None,
             pager_offset: 0.0,
             pager_drag: None,
@@ -1170,11 +1257,15 @@ mod tests {
     #[test]
     /// Verifies startup exposes cached entries while a background refresh runs.
     fn initialization_populates_the_ui_from_cached_feed_before_refresh() {
+        let _locale_guard = crate::resources::lock_locale_tests();
         let paths = temporary_paths("local-first");
         let entries = state_with_entries(12).entries;
         let mut state = state_with_entries(0);
         state.initializing = true;
-        state.locale = Locale::SimplifiedChinese;
+        let settings = Settings {
+            locale: Some(Locale::SimplifiedChinese),
+            ..Settings::default()
+        };
 
         let _ = update(
             &mut state,
@@ -1182,7 +1273,7 @@ mod tests {
                 desktop: Desktop::Gnome,
                 paths,
                 client: reqwest::Client::new(),
-                settings: Settings::default(),
+                settings,
                 cached_entries: entries.clone(),
             })),
         );
@@ -1193,8 +1284,43 @@ mod tests {
         assert!(!state.busy);
         assert_eq!(
             state.status,
-            Locale::SimplifiedChinese.text(TextKey::cached_feed_refreshing)
+            StatusText::Localized(texts::cached_feed_refreshing)
         );
+        assert_eq!(current_locale(), Locale::SimplifiedChinese);
+    }
+
+    #[test]
+    /// Verifies a locale message changes both runtime and in-memory settings immediately.
+    fn locale_message_switches_runtime_language_immediately() {
+        let _locale_guard = crate::resources::lock_locale_tests();
+        let mut state = state_with_entries(0);
+        state.status = StatusText::localized(texts::loading_feed);
+
+        let _ = update(&mut state, Message::SetLocale(Locale::SimplifiedChinese));
+
+        assert_eq!(current_locale(), Locale::SimplifiedChinese);
+        assert_eq!(state.settings.locale, Some(Locale::SimplifiedChinese));
+        assert_eq!(state.status.resolve(), "正在加载壁纸源…");
+    }
+
+    #[test]
+    /// Verifies rapid language changes coalesce into a final persistence task.
+    fn locale_persistence_keeps_the_latest_selection() {
+        let _locale_guard = crate::resources::lock_locale_tests();
+        let mut state = state_with_entries(0);
+        state.paths = Some(temporary_paths("locale-save"));
+
+        let first = update(&mut state, Message::SetLocale(Locale::SimplifiedChinese));
+        assert!(state.locale_save_in_flight);
+        let second = update(&mut state, Message::SetLocale(Locale::English));
+        assert!(state.locale_save_pending);
+        drop((first, second));
+
+        let final_save = update(&mut state, Message::LocaleSaved(Ok(())));
+        assert!(state.locale_save_in_flight);
+        assert!(!state.locale_save_pending);
+        assert_eq!(state.settings.locale, Some(Locale::English));
+        drop(final_save);
     }
 
     #[test]

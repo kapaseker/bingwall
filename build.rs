@@ -102,7 +102,7 @@ fn validate_localized_keys(
     }
 }
 
-/// Generates resource enums, resolvers, and literal-key macro arms from validated inputs.
+/// Generates static resource descriptors and literal-key macro arms from validated inputs.
 fn generate_resources(
     default_strings: &BTreeMap<String, String>,
     chinese_strings: &BTreeMap<String, String>,
@@ -120,35 +120,29 @@ fn generate_resources(
     output
 }
 
-/// Generates localized text keys, fallback-aware templates, and parameter-aware macro arms.
+/// Generates localized text descriptors and parameter-aware literal macro arms.
 fn generate_text_resources(
     output: &mut String,
     defaults: &BTreeMap<String, String>,
     chinese: &BTreeMap<String, String>,
 ) {
-    generate_key_enum(output, "TextKey", defaults.keys());
-    output.push_str("\n/// Returns the localized template for a generated text key.\n");
-    output.push_str("pub(crate) fn generated_text_template(locale: Locale, key: TextKey) -> &'static str {\n    match (locale, key) {\n");
-    for (key, value) in chinese {
+    output.push_str("#[allow(dead_code, non_upper_case_globals)]\npub(crate) mod generated_text {\n    use super::TextResource;\n");
+    for (key, default) in defaults {
+        let localized = chinese.get(key).map_or_else(
+            || "None".to_owned(),
+            |value| format!("Some({})", rust_string(value)),
+        );
         output.push_str(&format!(
-            "        (Locale::SimplifiedChinese, TextKey::{key}) => {},\n",
-            rust_string(value)
+            "    pub(crate) const {key}: TextResource = TextResource::new({}, {localized});\n",
+            rust_string(default)
         ));
     }
-    for (key, value) in defaults {
-        output.push_str(&format!(
-            "        (_, TextKey::{key}) => {},\n",
-            rust_string(value)
-        ));
-    }
-    output.push_str("    }\n}\n\n");
-
-    output.push_str("macro_rules! text {\n");
+    output.push_str("}\n\nmacro_rules! text {\n");
     for (key, value) in defaults {
         let placeholders = placeholders(value);
         if placeholders.is_empty() {
             output.push_str(&format!(
-                "    ({key}) => {{ __resource_context!().text(crate::resources::TextKey::{key}, &[]) }};\n"
+                "    ({key}) => {{ crate::resources::generated_text::{key}.resolve(&[]) }};\n"
             ));
         } else {
             let parameters = placeholders
@@ -162,78 +156,61 @@ fn generate_text_resources(
                 .collect::<Vec<_>>()
                 .join(", ");
             output.push_str(&format!(
-                "    ({key}, {parameters}) => {{ __resource_context!().text(crate::resources::TextKey::{key}, &[{arguments}]) }};\n"
+                "    ({key}, {parameters}) => {{ crate::resources::generated_text::{key}.resolve(&[{arguments}]) }};\n"
             ));
         }
     }
     output.push_str("}\n\n");
 }
 
-/// Generates semantic color keys and validated RGBA resolver branches.
+/// Generates static color descriptors and literal macro arms.
 fn generate_color_resources(output: &mut String, colors: &BTreeMap<String, String>) {
-    generate_key_enum(output, "ColorKey", colors.keys());
-    output.push_str("\n/// Returns the RGBA channels for a generated semantic color key.\n");
-    output
-        .push_str("pub(crate) fn generated_color(key: ColorKey) -> [f32; 4] {\n    match key {\n");
+    output.push_str("#[allow(dead_code, non_upper_case_globals)]\npub(crate) mod generated_colors {\n    use super::ColorResource;\n");
     for (key, value) in colors {
         let [red, green, blue, alpha] = parse_color(key, value);
         output.push_str(&format!(
-            "        ColorKey::{key} => [{red:?}, {green:?}, {blue:?}, {alpha:?}],\n"
+            "    pub(crate) const {key}: ColorResource = ColorResource::new([{red:?}, {green:?}, {blue:?}, {alpha:?}]);\n"
         ));
     }
-    output.push_str("    }\n}\n\nmacro_rules! color {\n");
+    output.push_str("}\n\nmacro_rules! color {\n");
     for key in colors.keys() {
         output.push_str(&format!(
-            "    ({key}) => {{ __resource_context!().color(crate::resources::ColorKey::{key}) }};\n"
+            "    ({key}) => {{ crate::resources::generated_colors::{key}.resolve() }};\n"
         ));
     }
     output.push_str("}\n\n");
 }
 
-/// Generates dimension keys with explicit layout or text scale classification.
+/// Generates static unscaled dimensions and literal macro arms.
 fn generate_dimension_resources(output: &mut String, dimensions: &BTreeMap<String, String>) {
-    generate_key_enum(output, "DimensionKey", dimensions.keys());
-    output.push_str("\n/// Returns the base value and scale kind for a generated dimension key.\n");
-    output.push_str("pub(crate) fn generated_dimension(key: DimensionKey) -> (f32, DimensionScale) {\n    match key {\n");
+    output.push_str("#[allow(dead_code, non_upper_case_globals)]\npub(crate) mod generated_dimensions {\n    use super::DimensionResource;\n");
     for (key, value) in dimensions {
-        let (scale, number) = value
-            .split_once(':')
-            .unwrap_or_else(|| panic!("dimension `{key}` must use layout:number or text:number"));
-        let number: f32 = number
+        let number: f32 = value
             .parse()
-            .unwrap_or_else(|_| panic!("dimension `{key}` contains invalid number `{number}`"));
+            .unwrap_or_else(|_| panic!("dimension `{key}` contains invalid number `{value}`"));
         if !number.is_finite() || number < 0.0 {
             panic!("dimension `{key}` must be a finite non-negative number");
         }
-        let scale = match scale {
-            "layout" => "DimensionScale::Layout",
-            "text" => "DimensionScale::Text",
-            _ => panic!("dimension `{key}` uses unknown scale `{scale}`"),
-        };
         output.push_str(&format!(
-            "        DimensionKey::{key} => ({number:?}, {scale}),\n"
+            "    pub(crate) const {key}: DimensionResource = DimensionResource::new({number:?});\n"
         ));
     }
-    output.push_str("    }\n}\n\nmacro_rules! dimension {\n");
+    output.push_str("}\n\nmacro_rules! dimension {\n");
     for key in dimensions.keys() {
         output.push_str(&format!(
-            "    ({key}) => {{ __resource_context!().dimension(crate::resources::DimensionKey::{key}) }};\n"
+            "    ({key}) => {{ crate::resources::generated_dimensions::{key}.resolve() }};\n"
         ));
     }
     output.push_str("}\n\n");
 }
 
-/// Generates image keys and validates placeholder or file-backed resource declarations.
+/// Generates static image descriptors after validating placeholder or file declarations.
 fn generate_image_resources(
     output: &mut String,
     images: &BTreeMap<String, String>,
     resource_root: &Path,
 ) {
-    generate_key_enum(output, "ImageKey", images.keys());
-    output.push_str("\n/// Returns the source declaration for a generated image key.\n");
-    output.push_str(
-        "pub(crate) fn generated_image(key: ImageKey) -> ImageResource {\n    match key {\n",
-    );
+    output.push_str("#[allow(dead_code, non_upper_case_globals)]\npub(crate) mod generated_images {\n    use super::ImageResource;\n");
     for (key, value) in images {
         let expression = if let Some(placeholder) = value.strip_prefix("placeholder:") {
             if placeholder.is_empty() {
@@ -255,28 +232,15 @@ fn generate_image_resources(
         } else {
             panic!("image `{key}` must use placeholder:value or file:relative/path");
         };
-        output.push_str(&format!("        ImageKey::{key} => {expression},\n"));
-    }
-    output.push_str("    }\n}\n\nmacro_rules! image {\n");
-    for key in images.keys() {
         output.push_str(&format!(
-            "    ({key}) => {{ __resource_context!().image(crate::resources::ImageKey::{key}) }};\n"
+            "    pub(crate) const {key}: ImageResource = {expression};\n"
         ));
     }
-    output.push_str("}\n");
-}
-
-/// Emits a lowercase resource-key enum whose variants preserve properties keys exactly.
-fn generate_key_enum<'a>(
-    output: &mut String,
-    enum_name: &str,
-    keys: impl Iterator<Item = &'a String>,
-) {
-    output.push_str("#[allow(non_camel_case_types)]\n");
-    output.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
-    output.push_str(&format!("pub enum {enum_name} {{\n"));
-    for key in keys {
-        output.push_str(&format!("    {key},\n"));
+    output.push_str("}\n\nmacro_rules! image {\n");
+    for key in images.keys() {
+        output.push_str(&format!(
+            "    ({key}) => {{ crate::resources::generated_images::{key} }};\n"
+        ));
     }
     output.push_str("}\n");
 }

@@ -13,16 +13,21 @@ dimension!(top_overlay_height)
 image!(previous)
 ```
 
-`build.rs` validates every properties file and generates typed keys plus one
-explicit macro arm per resource. Invalid keys, duplicate keys, malformed
+`build.rs` validates every properties file and generates one typed static descriptor plus one
+explicit macro arm per resource. Macros reference descriptors directly; no key-to-value
+lookup table is generated. Invalid keys, duplicate keys, malformed
 values, unknown translations, and mismatched translation placeholders stop the
 build.
+
+Text resources read the application-wide locale at resolution time, so changing
+the locale does not require a per-function resource binding. Colors, dimensions,
+and images are compile-time static resources.
 
 ## File formats
 
 - `strings.properties`: UTF-8 text; named placeholders use `{name}`.
 - `colors.properties`: `#RRGGBB`, `#RRGGBBAA`, or `rgba(r,g,b,a)`.
-- `dimensions.properties`: `layout:number` or `text:number`.
+- `dimensions.properties`: a finite non-negative number representing fixed logical pixels.
 - `images.properties`: `placeholder:text` or `file:images/relative-path`.
 
 Real image files belong in `images/` and are embedded into the executable at

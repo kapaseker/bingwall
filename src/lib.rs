@@ -1,13 +1,3 @@
-macro_rules! bind_resources {
-    ($resources:ident) => {
-        macro_rules! __resource_context {
-            () => {
-                $resources
-            };
-        }
-    };
-}
-
 pub mod app;
 pub mod cache;
 pub mod feed;
@@ -26,19 +16,19 @@ pub const FEED_URL: &str =
 
 #[cfg(test)]
 mod generated_resource_macro_tests {
-    use crate::resources::{AppTheme, Locale, ResourceContext};
+    use crate::resources::{Locale, lock_locale_tests, set_locale};
 
     #[test]
     /// Verifies generated naked-key macros resolve every resource category.
     fn generated_macros_resolve_typed_resource_keys() {
-        let resources = ResourceContext::new(Locale::English, AppTheme::Dark, 2.0, 3.0);
-        bind_resources!(resources);
+        let _locale_guard = lock_locale_tests();
+        set_locale(Locale::English);
 
         assert_eq!(text!(daily_change), "Daily change");
         assert_eq!(text!(page_counter, 3, 10), "3 / 10");
         assert_eq!(color!(surface_fallback), iced::Color::from_rgb8(18, 18, 18));
-        assert_eq!(dimension!(toggle_size), 44.0);
-        assert_eq!(dimension!(text_label), 48.0);
+        assert_eq!(dimension!(toggle_size), 22.0);
+        assert_eq!(dimension!(text_label), 16.0);
         assert_eq!(image!(previous).placeholder(), "‹");
     }
 }

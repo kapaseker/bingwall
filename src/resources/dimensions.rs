@@ -1,29 +1,28 @@
-use super::{DimensionKey, generated_dimension};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DimensionScale {
-    Layout,
-    Text,
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DimensionResource {
+    value: f32,
 }
 
-/// Resolves a generated dimension with its declared independent scale factor.
-pub(super) fn resolve_dimension(key: DimensionKey, layout_scale: f32, text_scale: f32) -> f32 {
-    let (value, scale) = generated_dimension(key);
-    value
-        * match scale {
-            DimensionScale::Layout => layout_scale,
-            DimensionScale::Text => text_scale,
-        }
+impl DimensionResource {
+    /// Creates a compile-time fixed dimension descriptor.
+    pub(crate) const fn new(value: f32) -> Self {
+        Self { value }
+    }
+
+    /// Returns the fixed logical-pixel value declared by the resource.
+    pub(crate) const fn resolve(self) -> f32 {
+        self.value
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::resources::generated_dimensions;
 
     #[test]
-    /// Verifies generated dimensions select layout and text scaling independently.
-    fn generated_dimensions_use_declared_scale_kind() {
-        assert_eq!(resolve_dimension(DimensionKey::toggle_size, 2.0, 3.0), 44.0);
-        assert_eq!(resolve_dimension(DimensionKey::text_label, 2.0, 3.0), 48.0);
+    /// Verifies generated dimensions retain their configured fixed values.
+    fn generated_dimensions_are_unscaled() {
+        assert_eq!(generated_dimensions::toggle_size.resolve(), 22.0);
+        assert_eq!(generated_dimensions::text_label.resolve(), 16.0);
     }
 }

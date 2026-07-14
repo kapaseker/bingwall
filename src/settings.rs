@@ -3,12 +3,15 @@ use std::{fs, io, path::Path};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::resources::Locale;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub daily_change: bool,
     pub applied_image: Option<String>,
     pub last_update_status: Option<String>,
+    pub locale: Option<Locale>,
 }
 
 #[derive(Debug, Error)]
@@ -80,10 +83,16 @@ mod tests {
             daily_change: true,
             applied_image: Some("wall.jpg".into()),
             last_update_status: Some("ok".into()),
+            locale: Some(Locale::SimplifiedChinese),
         };
 
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), settings);
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains(r#""locale": "simplified_chinese""#)
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -103,5 +112,6 @@ mod tests {
         assert!(settings.daily_change);
         assert_eq!(settings.applied_image.as_deref(), Some("wall.jpg"));
         assert_eq!(settings.last_update_status.as_deref(), Some("ok"));
+        assert_eq!(settings.locale, None);
     }
 }
