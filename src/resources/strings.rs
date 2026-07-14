@@ -1,31 +1,11 @@
 use std::{borrow::Cow, env};
 
+use super::{TextKey, generated_text_template};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Locale {
     English,
     SimplifiedChinese,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum TextKey {
-    Unsupported,
-    DailyChange,
-    Previous,
-    Next,
-    SetWallpaper,
-    Refresh,
-    LoadingFeed,
-    LoadingPreview,
-    Ready,
-    FeedRefreshed,
-    CachedFeed,
-    CachedFeedRefreshing,
-    Applied,
-    Enabled,
-    Disabled,
-    Working,
-    Retry,
-    PageCounter { current: usize, total: usize },
 }
 
 impl Locale {
@@ -47,57 +27,39 @@ impl Locale {
         }
     }
 
-    /// Resolves a localized user-interface message for this locale.
+    /// Resolves a generated static text key without formatting arguments.
     pub fn text(self, key: TextKey) -> Cow<'static, str> {
-        resolve_text(self, key)
+        format_template(generated_text_template(self, key), &[])
     }
 }
 
-/// Resolves static and parameterized user-interface messages for a locale.
-pub fn resolve_text(locale: Locale, key: TextKey) -> Cow<'static, str> {
-    use TextKey::*;
-
-    match (locale, key) {
-        (Locale::English, Unsupported) => {
-            "Bingwall supports only GNOME and Cinnamon on this platform.".into()
-        }
-        (Locale::SimplifiedChinese, Unsupported) => {
-            "此平台不受支持。Bingwall 仅支持 GNOME 和 Cinnamon。".into()
-        }
-        (Locale::English, DailyChange) => "Daily change".into(),
-        (Locale::SimplifiedChinese, DailyChange) => "每日更换".into(),
-        (Locale::English, Previous) => "Previous wallpaper".into(),
-        (Locale::SimplifiedChinese, Previous) => "上一张壁纸".into(),
-        (Locale::English, Next) => "Next wallpaper".into(),
-        (Locale::SimplifiedChinese, Next) => "下一张壁纸".into(),
-        (Locale::English, SetWallpaper) => "Set as wallpaper".into(),
-        (Locale::SimplifiedChinese, SetWallpaper) => "设为壁纸".into(),
-        (Locale::English, Refresh) => "Refresh feed".into(),
-        (Locale::SimplifiedChinese, Refresh) => "刷新壁纸源".into(),
-        (Locale::English, LoadingFeed) => "Loading wallpaper feed…".into(),
-        (Locale::SimplifiedChinese, LoadingFeed) => "正在加载壁纸源…".into(),
-        (Locale::English, LoadingPreview) => "Loading preview…".into(),
-        (Locale::SimplifiedChinese, LoadingPreview) => "正在加载预览…".into(),
-        (Locale::English, Ready) => "Ready".into(),
-        (Locale::SimplifiedChinese, Ready) => "就绪".into(),
-        (Locale::English, FeedRefreshed) => "Feed refreshed".into(),
-        (Locale::SimplifiedChinese, FeedRefreshed) => "壁纸源已刷新".into(),
-        (Locale::English, CachedFeed) => "Offline — showing cached feed".into(),
-        (Locale::SimplifiedChinese, CachedFeed) => "离线 — 正在显示缓存的壁纸源".into(),
-        (Locale::English, CachedFeedRefreshing) => "Showing cached feed while refreshing…".into(),
-        (Locale::SimplifiedChinese, CachedFeedRefreshing) => "正在显示缓存并后台刷新…".into(),
-        (Locale::English, Applied) => "Wallpaper applied".into(),
-        (Locale::SimplifiedChinese, Applied) => "壁纸已应用".into(),
-        (Locale::English, Enabled) => "Daily change enabled".into(),
-        (Locale::SimplifiedChinese, Enabled) => "已启用每日更换".into(),
-        (Locale::English, Disabled) => "Daily change disabled".into(),
-        (Locale::SimplifiedChinese, Disabled) => "已关闭每日更换".into(),
-        (Locale::English, Working) => "Working…".into(),
-        (Locale::SimplifiedChinese, Working) => "处理中…".into(),
-        (Locale::English, Retry) => "Retry".into(),
-        (Locale::SimplifiedChinese, Retry) => "重试".into(),
-        (_, PageCounter { current, total }) => format!("{current} / {total}").into(),
+/// Substitutes named values into a generated localized template.
+pub(super) fn format_template(
+    template: &'static str,
+    arguments: &[(&str, String)],
+) -> Cow<'static, str> {
+    if arguments.is_empty() {
+        return Cow::Borrowed(template);
     }
+
+    let mut output = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find('{') {
+        output.push_str(&rest[..start]);
+        let after_start = &rest[start + 1..];
+        let end = after_start
+            .find('}')
+            .expect("build.rs validates generated text placeholders");
+        let name = &after_start[..end];
+        let value = arguments
+            .iter()
+            .find_map(|(argument, value)| (*argument == name).then_some(value))
+            .unwrap_or_else(|| panic!("missing value for text placeholder `{name}`"));
+        output.push_str(value);
+        rest = &after_start[end + 1..];
+    }
+    output.push_str(rest);
+    Cow::Owned(output)
 }
 
 #[cfg(test)]
@@ -112,13 +74,23 @@ mod tests {
     }
 
     #[test]
-    /// Keeps parameter formatting inside the localization boundary.
-    fn formats_page_counter_from_runtime_values() {
-        let key = TextKey::PageCounter {
-            current: 3,
-            total: 10,
-        };
-        assert_eq!(resolve_text(Locale::English, key), "3 / 10");
-        assert_eq!(resolve_text(Locale::SimplifiedChinese, key), "3 / 10");
+    /// Verifies a missing Chinese entry falls back to the default language template.
+    fn missing_translation_falls_back_to_default_language() {
+        assert_eq!(
+            generated_text_template(Locale::SimplifiedChinese, TextKey::page_counter),
+            "{current} / {total}"
+        );
+    }
+
+    #[test]
+    /// Formats generated placeholders with values supplied by the resource macro.
+    fn formats_generated_text_arguments() {
+        assert_eq!(
+            format_template(
+                "{current} / {total}",
+                &[("current", "3".into()), ("total", "10".into())]
+            ),
+            "3 / 10"
+        );
     }
 }

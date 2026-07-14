@@ -3,11 +3,10 @@ mod context;
 mod dimensions;
 mod icons;
 mod strings;
-mod typography;
 
-pub use colors::{ColorToken, resolve_color};
 pub use context::{AppTheme, ResourceContext};
-pub use dimensions::{DimensionToken, resolve_dimension};
-pub use icons::{IconId, resolve_icon};
-pub use strings::{Locale, TextKey, resolve_text};
-pub use typography::{TextSizeToken, resolve_text_size};
+pub use dimensions::DimensionScale;
+pub use icons::ImageResource;
+pub use strings::Locale;
+
+include!(concat!(env!("OUT_DIR"), "/resources_generated.rs"));

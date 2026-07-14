@@ -1,5 +1,6 @@
 use iced::widget::{
-    Space, Stack, button, column, container, image, mouse_area, responsive, row, text, toggler,
+    Space, Stack, button, column, container, image as iced_image, mouse_area, responsive, row,
+    text as iced_text, toggler,
 };
 use iced::{ContentFit, Element, Fill, Length, Padding, Size};
 
@@ -9,7 +10,7 @@ use translated::translate_x;
 
 use crate::{
     app::{BASE_WIDTH, Message, State, transition_offset},
-    resources::{AppTheme, DimensionToken, IconId, ResourceContext, TextKey, TextSizeToken},
+    resources::{AppTheme, ResourceContext},
     theme,
 };
 
@@ -46,8 +47,9 @@ fn immersive_view(state: &State, available: Size) -> Element<'_, Message> {
 
 /// Builds the centered status view shown while startup is in progress.
 fn loading_view(state: &State, resources: ResourceContext) -> Element<'_, Message> {
-    container(text(&state.status).size(resources.text_size(TextSizeToken::Standalone)))
-        .padding(resources.dimension(DimensionToken::StandalonePadding))
+    bind_resources!(resources);
+    container(iced_text(&state.status).size(dimension!(text_standalone)))
+        .padding(dimension!(standalone_padding))
         .center(Fill)
         .style(move |iced_theme| theme::fallback_background(resources, iced_theme))
         .into()
@@ -55,8 +57,9 @@ fn loading_view(state: &State, resources: ResourceContext) -> Element<'_, Messag
 
 /// Builds the message shown when the current desktop is unsupported.
 fn unsupported_view(state: &State, resources: ResourceContext) -> Element<'_, Message> {
-    container(text(&state.status).size(resources.text_size(TextSizeToken::Standalone)))
-        .padding(resources.dimension(DimensionToken::StandalonePadding))
+    bind_resources!(resources);
+    container(iced_text(&state.status).size(dimension!(text_standalone)))
+        .padding(dimension!(standalone_padding))
         .center(Fill)
         .style(move |iced_theme| theme::fallback_background(resources, iced_theme))
         .into()
@@ -142,61 +145,56 @@ fn controls(state: &State, resources: ResourceContext) -> Element<'_, Message> {
 
 /// Builds the title-free top overlay containing only the daily-change setting.
 fn top_controls(state: &State, resources: ResourceContext) -> Element<'_, Message> {
+    bind_resources!(resources);
     let daily_toggle = toggler(state.settings.daily_change)
-        .label(resources.text(TextKey::DailyChange))
-        .size(resources.dimension(DimensionToken::ToggleSize))
-        .text_size(resources.text_size(TextSizeToken::Label))
-        .spacing(resources.dimension(DimensionToken::ToggleSpacing))
+        .label(text!(daily_change))
+        .size(dimension!(toggle_size))
+        .text_size(dimension!(text_label))
+        .spacing(dimension!(toggle_spacing))
         .on_toggle_maybe((!state.busy).then_some(Message::ToggleDaily));
 
     container(row![Space::new().width(Fill), daily_toggle].align_y(iced::Center))
         .padding([
-            resources.dimension(DimensionToken::TopPaddingVertical),
-            resources.dimension(DimensionToken::TopPaddingHorizontal),
+            dimension!(top_padding_vertical),
+            dimension!(top_padding_horizontal),
         ])
         .width(Fill)
-        .height(resources.dimension(DimensionToken::TopOverlayHeight))
+        .height(dimension!(top_overlay_height))
         .style(move |iced_theme| theme::top_scrim(resources, iced_theme))
         .into()
 }
 
 /// Builds the previous and next placeholder buttons centered on the window edges.
 fn navigation_controls(state: &State, resources: ResourceContext) -> Element<'_, Message> {
+    bind_resources!(resources);
     let motion_idle = state.transition.is_none();
-    let previous = button(
-        text(resources.icon(IconId::Previous))
-            .size(resources.text_size(TextSizeToken::NavigationIcon)),
-    )
-    .padding([
-        resources.dimension(DimensionToken::NavigationButtonPaddingVertical),
-        resources.dimension(DimensionToken::NavigationButtonPaddingHorizontal),
-    ])
-    .style(move |iced_theme, status| theme::edge_navigation(resources, iced_theme, status))
-    .on_press_maybe(
-        (state.selected > 0 && !state.busy && motion_idle).then_some(Message::Previous),
-    );
-    let next = button(
-        text(resources.icon(IconId::Next)).size(resources.text_size(TextSizeToken::NavigationIcon)),
-    )
-    .padding([
-        resources.dimension(DimensionToken::NavigationButtonPaddingVertical),
-        resources.dimension(DimensionToken::NavigationButtonPaddingHorizontal),
-    ])
-    .style(move |iced_theme, status| theme::edge_navigation(resources, iced_theme, status))
-    .on_press_maybe(
-        (state.selected + 1 < state.entries.len() && !state.busy && motion_idle)
-            .then_some(Message::Next),
-    );
+    let previous =
+        button(iced_text(image!(previous).placeholder()).size(dimension!(text_navigation_icon)))
+            .padding([
+                dimension!(navigation_button_padding_vertical),
+                dimension!(navigation_button_padding_horizontal),
+            ])
+            .style(move |iced_theme, status| theme::edge_navigation(resources, iced_theme, status))
+            .on_press_maybe(
+                (state.selected > 0 && !state.busy && motion_idle).then_some(Message::Previous),
+            );
+    let next = button(iced_text(image!(next).placeholder()).size(dimension!(text_navigation_icon)))
+        .padding([
+            dimension!(navigation_button_padding_vertical),
+            dimension!(navigation_button_padding_horizontal),
+        ])
+        .style(move |iced_theme, status| theme::edge_navigation(resources, iced_theme, status))
+        .on_press_maybe(
+            (state.selected + 1 < state.entries.len() && !state.busy && motion_idle)
+                .then_some(Message::Next),
+        );
 
     container(
         row![previous, Space::new().width(Fill), next]
-            .spacing(resources.dimension(DimensionToken::NavigationSpacing))
+            .spacing(dimension!(navigation_spacing))
             .align_y(iced::Center),
     )
-    .padding([
-        0.0,
-        resources.dimension(DimensionToken::NavigationHorizontalInset),
-    ])
+    .padding([0.0, dimension!(navigation_horizontal_inset)])
     .width(Fill)
     .height(Fill)
     .center_y(Fill)
@@ -205,42 +203,38 @@ fn navigation_controls(state: &State, resources: ResourceContext) -> Element<'_,
 
 /// Builds the metadata, actions, and status overlay at the bottom of the image.
 fn bottom_controls(state: &State, resources: ResourceContext) -> Element<'_, Message> {
+    bind_resources!(resources);
     let details = selected_details(state, resources);
-    let set_button = button(
-        text(resources.text(TextKey::SetWallpaper)).size(resources.text_size(TextSizeToken::Label)),
-    )
-    .padding([
-        resources.dimension(DimensionToken::ActionButtonPaddingVertical),
-        resources.dimension(DimensionToken::ActionButtonPaddingHorizontal),
-    ])
-    .style(theme::primary_action)
-    .on_press_maybe(
-        (state.selected_preview_is_ready() && !state.busy).then_some(Message::SetWallpaper),
-    );
-    let refresh_button = button(
-        text(resources.text(TextKey::Refresh)).size(resources.text_size(TextSizeToken::Label)),
-    )
-    .padding([
-        resources.dimension(DimensionToken::ActionButtonPaddingVertical),
-        resources.dimension(DimensionToken::ActionButtonPaddingHorizontal),
-    ])
-    .style(theme::secondary_action)
-    .on_press_maybe((!state.busy).then_some(Message::Refresh));
+    let set_button = button(iced_text(text!(set_wallpaper)).size(dimension!(text_label)))
+        .padding([
+            dimension!(action_button_padding_vertical),
+            dimension!(action_button_padding_horizontal),
+        ])
+        .style(theme::primary_action)
+        .on_press_maybe(
+            (state.selected_preview_is_ready() && !state.busy).then_some(Message::SetWallpaper),
+        );
+    let refresh_button = button(iced_text(text!(refresh)).size(dimension!(text_label)))
+        .padding([
+            dimension!(action_button_padding_vertical),
+            dimension!(action_button_padding_horizontal),
+        ])
+        .style(theme::secondary_action)
+        .on_press_maybe((!state.busy).then_some(Message::Refresh));
 
     container(
         column![
             details,
-            row![set_button, refresh_button]
-                .spacing(resources.dimension(DimensionToken::ActionSpacing)),
-            text(&state.status).size(resources.text_size(TextSizeToken::Status))
+            row![set_button, refresh_button].spacing(dimension!(action_spacing)),
+            iced_text(&state.status).size(dimension!(text_status))
         ]
-        .spacing(resources.dimension(DimensionToken::ActionSpacing)),
+        .spacing(dimension!(action_spacing)),
     )
     .padding(Padding {
-        top: resources.dimension(DimensionToken::BottomPaddingTop),
-        right: resources.dimension(DimensionToken::BottomPaddingHorizontal),
-        bottom: resources.dimension(DimensionToken::BottomPaddingBottom),
-        left: resources.dimension(DimensionToken::BottomPaddingHorizontal),
+        top: dimension!(bottom_padding_top),
+        right: dimension!(bottom_padding_horizontal),
+        bottom: dimension!(bottom_padding_bottom),
+        left: dimension!(bottom_padding_horizontal),
     })
     .width(Fill)
     .style(move |iced_theme| theme::bottom_scrim(resources, iced_theme))
@@ -249,24 +243,22 @@ fn bottom_controls(state: &State, resources: ResourceContext) -> Element<'_, Mes
 
 /// Builds the date, position, and description for the selected wallpaper.
 fn selected_details(state: &State, resources: ResourceContext) -> Element<'_, Message> {
+    bind_resources!(resources);
     let Some(entry) = state.entries.get(state.selected) else {
-        return text(resources.text(TextKey::LoadingFeed))
-            .size(resources.text_size(TextSizeToken::Loading))
+        return iced_text(text!(loading_feed))
+            .size(dimension!(text_loading))
             .into();
     };
     column![
         row![
-            text(&entry.date).size(resources.text_size(TextSizeToken::Label)),
+            iced_text(&entry.date).size(dimension!(text_label)),
             Space::new().width(Fill),
-            text(resources.text(TextKey::PageCounter {
-                current: state.selected + 1,
-                total: state.entries.len(),
-            }))
-            .size(resources.text_size(TextSizeToken::Counter)),
+            iced_text(text!(page_counter, state.selected + 1, state.entries.len()))
+                .size(dimension!(text_counter)),
         ],
-        text(&entry.description).size(resources.text_size(TextSizeToken::Description)),
+        iced_text(&entry.description).size(dimension!(text_description)),
     ]
-    .spacing(resources.dimension(DimensionToken::MetadataSpacing))
+    .spacing(dimension!(metadata_spacing))
     .into()
 }
 
@@ -275,13 +267,14 @@ fn preview_image(
     handle: Option<iced::widget::image::Handle>,
     resources: ResourceContext,
 ) -> Element<'static, Message> {
+    bind_resources!(resources);
     match handle {
-        Some(handle) => image(handle)
+        Some(handle) => iced_image(handle)
             .width(Fill)
             .height(Fill)
             .content_fit(ContentFit::Cover)
             .into(),
-        None => container(text(resources.text(TextKey::LoadingPreview)))
+        None => container(iced_text(text!(loading_preview)))
             .width(Length::Fill)
             .height(Length::Fill)
             .center(Fill)

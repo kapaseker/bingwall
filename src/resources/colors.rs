@@ -1,33 +1,11 @@
 use iced::Color;
 
-use super::AppTheme;
+use super::{AppTheme, ColorKey, generated_color};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ColorToken {
-    TextOnImage,
-    SurfaceFallback,
-    SurfaceScrimTransparent,
-    SurfaceScrimWeak,
-    SurfaceScrimMedium,
-    SurfaceScrimStrong,
-    Interactive,
-    InteractiveHovered,
-    InteractiveDisabled,
-}
-
-/// Resolves a semantic color token for the selected application theme.
-pub fn resolve_color(theme: AppTheme, token: ColorToken) -> Color {
-    match (theme, token) {
-        (AppTheme::Dark, ColorToken::TextOnImage) => Color::WHITE,
-        (AppTheme::Dark, ColorToken::SurfaceFallback) => Color::from_rgb8(18, 18, 18),
-        (AppTheme::Dark, ColorToken::SurfaceScrimTransparent) => Color::TRANSPARENT,
-        (AppTheme::Dark, ColorToken::SurfaceScrimWeak) => Color::from_rgba8(0, 0, 0, 0.42),
-        (AppTheme::Dark, ColorToken::SurfaceScrimMedium) => Color::from_rgba8(0, 0, 0, 0.72),
-        (AppTheme::Dark, ColorToken::SurfaceScrimStrong) => Color::from_rgba8(0, 0, 0, 0.82),
-        (AppTheme::Dark, ColorToken::Interactive) => Color::from_rgba8(0, 0, 0, 0.52),
-        (AppTheme::Dark, ColorToken::InteractiveHovered) => Color::from_rgba8(0, 0, 0, 0.72),
-        (AppTheme::Dark, ColorToken::InteractiveDisabled) => Color::from_rgba8(0, 0, 0, 0.18),
-    }
+/// Resolves a generated semantic color for the selected application theme.
+pub(super) fn resolve_color(_theme: AppTheme, key: ColorKey) -> Color {
+    let [red, green, blue, alpha] = generated_color(key);
+    Color::from_rgba(red, green, blue, alpha)
 }
 
 #[cfg(test)]
@@ -35,22 +13,22 @@ mod tests {
     use super::*;
 
     #[test]
-    /// Locks the existing dark overlay palette while UI styles are extracted.
-    fn dark_palette_preserves_existing_overlay_colors() {
+    /// Locks the generated dark overlay palette to the properties source values.
+    fn generated_palette_preserves_overlay_colors() {
         assert_eq!(
-            resolve_color(AppTheme::Dark, ColorToken::SurfaceFallback),
+            resolve_color(AppTheme::Dark, ColorKey::surface_fallback),
             Color::from_rgb8(18, 18, 18)
         );
         assert_eq!(
-            resolve_color(AppTheme::Dark, ColorToken::Interactive),
+            resolve_color(AppTheme::Dark, ColorKey::interactive),
             Color::from_rgba8(0, 0, 0, 0.52)
         );
         assert_eq!(
-            resolve_color(AppTheme::Dark, ColorToken::InteractiveHovered),
+            resolve_color(AppTheme::Dark, ColorKey::interactive_hovered),
             Color::from_rgba8(0, 0, 0, 0.72)
         );
         assert_eq!(
-            resolve_color(AppTheme::Dark, ColorToken::InteractiveDisabled),
+            resolve_color(AppTheme::Dark, ColorKey::interactive_disabled),
             Color::from_rgba8(0, 0, 0, 0.18)
         );
     }

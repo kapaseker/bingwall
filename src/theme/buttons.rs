@@ -1,7 +1,7 @@
 use iced::widget::button;
 use iced::{Background, Theme};
 
-use crate::resources::{ColorToken, DimensionToken, ResourceContext};
+use crate::resources::ResourceContext;
 
 /// Uses Iced's primary button treatment for the main wallpaper action.
 pub(crate) fn primary_action(theme: &Theme, status: button::Status) -> button::Style {
@@ -19,15 +19,16 @@ pub(crate) fn edge_navigation(
     theme: &Theme,
     status: button::Status,
 ) -> button::Style {
+    bind_resources!(resources);
     let background = match status {
-        button::Status::Hovered => ColorToken::InteractiveHovered,
-        button::Status::Disabled => ColorToken::InteractiveDisabled,
-        button::Status::Active | button::Status::Pressed => ColorToken::Interactive,
+        button::Status::Hovered => color!(interactive_hovered),
+        button::Status::Disabled => color!(interactive_disabled),
+        button::Status::Active | button::Status::Pressed => color!(interactive),
     };
     let mut style = button::secondary(theme, status);
-    style.text_color = resources.color(ColorToken::TextOnImage);
-    style.background = Some(Background::Color(resources.color(background)));
-    style.border.radius = resources.dimension(DimensionToken::EdgeButtonRadius).into();
+    style.text_color = color!(text_on_image);
+    style.background = Some(Background::Color(background));
+    style.border.radius = dimension!(edge_button_radius).into();
     style
 }
 
@@ -44,8 +45,8 @@ mod tests {
     }
 
     #[test]
-    /// Verifies navigation states retain their existing overlay opacity.
-    fn navigation_style_uses_semantic_state_colors() {
+    /// Verifies navigation states retain their configured overlay opacity.
+    fn navigation_style_uses_generated_state_colors() {
         let theme = Theme::Dark;
         let active = edge_navigation(resources(), &theme, button::Status::Active);
         let hovered = edge_navigation(resources(), &theme, button::Status::Hovered);

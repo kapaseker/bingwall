@@ -3,8 +3,9 @@ use std::borrow::Cow;
 use iced::Color;
 
 use super::{
-    ColorToken, DimensionToken, IconId, Locale, TextKey, TextSizeToken, resolve_color,
-    resolve_dimension, resolve_icon, resolve_text, resolve_text_size,
+    ColorKey, DimensionKey, ImageKey, ImageResource, Locale, TextKey, colors::resolve_color,
+    dimensions::resolve_dimension, generated_text_template, icons::resolve_image,
+    strings::format_template,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,28 +32,23 @@ impl ResourceContext {
         }
     }
 
-    /// Resolves a localized message, including messages with runtime parameters.
-    pub fn text(self, key: TextKey) -> Cow<'static, str> {
-        resolve_text(self.locale, key)
+    /// Resolves a generated localized text key and substitutes its named arguments.
+    pub fn text(self, key: TextKey, arguments: &[(&str, String)]) -> Cow<'static, str> {
+        format_template(generated_text_template(self.locale, key), arguments)
     }
 
-    /// Resolves a semantic color for the active application theme.
-    pub fn color(self, token: ColorToken) -> Color {
-        resolve_color(self.theme, token)
+    /// Resolves a generated semantic color key for the active application theme.
+    pub fn color(self, key: ColorKey) -> Color {
+        resolve_color(self.theme, key)
     }
 
-    /// Resolves and scales a semantic layout dimension.
-    pub fn dimension(self, token: DimensionToken) -> f32 {
-        resolve_dimension(token) * self.layout_scale
+    /// Resolves a generated dimension key using its declared layout or text scale.
+    pub fn dimension(self, key: DimensionKey) -> f32 {
+        resolve_dimension(key, self.layout_scale, self.text_scale)
     }
 
-    /// Resolves and scales a semantic text size independently from layout dimensions.
-    pub fn text_size(self, token: TextSizeToken) -> f32 {
-        resolve_text_size(token) * self.text_scale
-    }
-
-    /// Resolves the temporary text glyph used for an icon identifier.
-    pub fn icon(self, icon: IconId) -> &'static str {
-        resolve_icon(icon)
+    /// Resolves a generated image key to a placeholder or packaged file declaration.
+    pub fn image(self, key: ImageKey) -> ImageResource {
+        resolve_image(key)
     }
 }

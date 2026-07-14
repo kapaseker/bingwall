@@ -170,7 +170,7 @@ fn boot() -> (State, Task<Message>) {
         invalidated_previews: HashSet::new(),
         gpu_preload_limit: GPU_PRELOAD_LIMIT,
         retried_current_allocation: HashSet::new(),
-        status: locale.text(TextKey::LoadingFeed).into(),
+        status: locale.text(TextKey::loading_feed).into(),
         busy: true,
         transition: None,
         pager_offset: 0.0,
@@ -220,7 +220,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             Ok(Startup::Unsupported) => {
                 state.initializing = false;
                 state.busy = false;
-                state.status = state.locale.text(TextKey::Unsupported).into();
+                state.status = state.locale.text(TextKey::unsupported).into();
                 Task::none()
             }
             Ok(Startup::Supported {
@@ -240,13 +240,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 state.visible_count = state.entries.len().min(PAGE_BATCH);
                 state.busy = !has_cached_feed;
                 state.status = if has_cached_feed {
-                    state.locale.text(TextKey::CachedFeedRefreshing).into()
+                    state.locale.text(TextKey::cached_feed_refreshing).into()
                 } else {
                     state
                         .settings
                         .last_update_status
                         .clone()
-                        .unwrap_or_else(|| state.locale.text(TextKey::LoadingFeed).into())
+                        .unwrap_or_else(|| state.locale.text(TextKey::loading_feed).into())
                 };
                 Task::batch([
                     schedule_previews(state),
@@ -275,8 +275,8 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                         state.visible_count = state.entries.len().min(PAGE_BATCH);
                     }
                     state.status = match origin {
-                        FeedOrigin::Network => state.locale.text(TextKey::FeedRefreshed),
-                        FeedOrigin::Cache => state.locale.text(TextKey::CachedFeed),
+                        FeedOrigin::Network => state.locale.text(TextKey::feed_refreshed),
+                        FeedOrigin::Cache => state.locale.text(TextKey::cached_feed),
                     }
                     .into();
                     schedule_previews(state)
@@ -384,7 +384,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             match result {
                 Ok(settings) => {
                     state.settings = settings;
-                    state.status = state.locale.text(TextKey::Applied).into();
+                    state.status = state.locale.text(TextKey::applied).into();
                 }
                 Err(error) => state.status = error,
             }
@@ -399,9 +399,9 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                     state.status = state
                         .locale
                         .text(if enabled {
-                            TextKey::Enabled
+                            TextKey::enabled
                         } else {
-                            TextKey::Disabled
+                            TextKey::disabled
                         })
                         .into();
                 }
@@ -445,7 +445,7 @@ fn refresh_task(state: &mut State, blocking: bool) -> Task<Message> {
     };
     if blocking {
         state.busy = true;
-        state.status = state.locale.text(TextKey::LoadingFeed).into();
+        state.status = state.locale.text(TextKey::loading_feed).into();
     }
     Task::perform(
         async move {
@@ -716,7 +716,7 @@ fn apply_selected_task(state: &mut State) -> Task<Message> {
         return Task::none();
     };
     state.busy = true;
-    state.status = state.locale.text(TextKey::Working).into();
+    state.status = state.locale.text(TextKey::working).into();
     Task::perform(
         async move {
             let image = service::ensure_image(&client, &paths, &entry)
@@ -740,11 +740,11 @@ fn toggle_daily_task(state: &mut State, enabled: bool) -> Task<Message> {
     };
     let current = state.entries.first().cloned();
     if enabled && current.is_none() {
-        state.status = state.locale.text(TextKey::LoadingFeed).into();
+        state.status = state.locale.text(TextKey::loading_feed).into();
         return Task::none();
     }
     state.busy = true;
-    state.status = state.locale.text(TextKey::Working).into();
+    state.status = state.locale.text(TextKey::working).into();
     Task::perform(
         async move { set_daily_change(enabled, desktop, paths, current, client).await },
         move |result| Message::ToggleFinished(enabled, result),
@@ -1193,7 +1193,7 @@ mod tests {
         assert!(!state.busy);
         assert_eq!(
             state.status,
-            Locale::SimplifiedChinese.text(TextKey::CachedFeedRefreshing)
+            Locale::SimplifiedChinese.text(TextKey::cached_feed_refreshing)
         );
     }
 

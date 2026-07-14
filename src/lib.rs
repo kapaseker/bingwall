@@ -1,8 +1,19 @@
+macro_rules! bind_resources {
+    ($resources:ident) => {
+        macro_rules! __resource_context {
+            () => {
+                $resources
+            };
+        }
+    };
+}
+
 pub mod app;
 pub mod cache;
 pub mod feed;
 pub mod paths;
 pub mod platform;
+#[macro_use]
 pub mod resources;
 pub mod service;
 pub mod settings;
@@ -12,3 +23,22 @@ mod ui;
 
 pub const FEED_URL: &str =
     "https://raw.githubusercontent.com/niumoo/bing-wallpaper/refs/heads/main/bing-wallpaper.md";
+
+#[cfg(test)]
+mod generated_resource_macro_tests {
+    use crate::resources::{AppTheme, Locale, ResourceContext};
+
+    #[test]
+    /// Verifies generated naked-key macros resolve every resource category.
+    fn generated_macros_resolve_typed_resource_keys() {
+        let resources = ResourceContext::new(Locale::English, AppTheme::Dark, 2.0, 3.0);
+        bind_resources!(resources);
+
+        assert_eq!(text!(daily_change), "Daily change");
+        assert_eq!(text!(page_counter, 3, 10), "3 / 10");
+        assert_eq!(color!(surface_fallback), iced::Color::from_rgb8(18, 18, 18));
+        assert_eq!(dimension!(toggle_size), 44.0);
+        assert_eq!(dimension!(text_label), 48.0);
+        assert_eq!(image!(previous).placeholder(), "‹");
+    }
+}
