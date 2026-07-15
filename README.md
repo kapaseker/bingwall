@@ -1,6 +1,30 @@
 # Bingwall
 
+<p align="center">
+  <img src="app_icon.png" alt="Bingwall app icon" width="256">
+</p>
+
 Bingwall is a small Rust/Iced desktop application for browsing and applying images from the daily Bing wallpaper feed. Automatic changes are opt-in and run independently of the application window at 08:00 local time.
+
+## Install
+
+1. Download the latest amd64 Debian package (`bingwall_<version>_amd64.deb`) from the [GitHub Releases page](https://github.com/kapaseker/bingwall/releases).
+2. Open a terminal in the directory containing the downloaded package and install it with APT:
+
+   ```bash
+   sudo apt install ./bingwall_<version>_amd64.deb
+   ```
+
+3. Launch **Bingwall** from the application menu.
+
+Installing Bingwall does not enable automatic wallpaper changes. To opt in, open the app and turn on **Daily change**.
+
+## Features
+
+- Browse and preview wallpapers from the daily Bing wallpaper feed
+- Set any displayed image as your desktop wallpaper
+- Optionally change your wallpaper automatically every day at 08:00 local time
+- Use the app in English or Simplified Chinese
 
 ## Supported systems
 
@@ -8,29 +32,27 @@ Bingwall is a small Rust/Iced desktop application for browsing and applying imag
 - Linux Mint 22 or newer with Cinnamon, on amd64
 - X11 and Wayland sessions
 
-On other desktops, Bingwall shows only an unsupported-platform message and performs no network or cache work.
+On other desktops, Bingwall shows an unsupported-platform message.
 
-## Features
+## Development
 
-- English or Simplified Chinese UI selected from the system locale
-- Full-window immersive wallpaper preview with floating controls over readable edge scrims
-- Translation-only horizontal pager with pointer/touch dragging, snap, buttons, keyboard arrows, and wheel/touchpad scrolling
-- 1280×720 minimum window size with proportional 16:9 resizing and uniformly scaled controls
-- Ten-entry metadata batches with prioritized background preloading around the selected entry
-- Manual **Set as wallpaper** action independent of automation
-- **Daily change** toggle that is off on first launch
-- Persistent systemd user timer at 08:00; a missed run executes after the next login or wake
-- Cached feed shown immediately at startup while a refresh runs in the background
-- Versioned 1080p preview cache with 16:9 center cropping; full-resolution files are reserved for wallpaper application
-- Downloaded wallpapers are reused from local storage and kept permanently
-- GNOME and Cinnamon wallpaper application in zoom/fill mode
+Install a current Rust toolchain and the native build tools required by Iced, then clone the repository:
 
-## Run from source
+```bash
+git clone https://github.com/kapaseker/bingwall.git
+cd bingwall
+```
 
-Install a current Rust toolchain, then run:
+Run the app from source:
 
 ```bash
 cargo run
+```
+
+Create an optimized application build:
+
+```bash
+cargo build --release --locked
 ```
 
 The standalone updater command used by the systemd service is:
@@ -41,22 +63,12 @@ cargo run -- update
 
 It changes the wallpaper only when **Daily change** is enabled in saved settings.
 
-## Build the Debian package
+### Build the Debian package
 
-The build requires `cargo`, `dpkg-deb`, and standard native build tools:
+The package build requires `cargo`, `dpkg-deb`, and standard native build tools:
 
 ```bash
 ./scripts/build-deb.sh
 ```
 
-The resulting package is written to `dist/`. Installing the package does not enable automatic wallpaper changes; the user must open Bingwall and turn on **Daily change**.
-
-## User data
-
-- Settings: `${XDG_CONFIG_HOME:-~/.config}/bingwall/settings.json`
-- Cached feed and images: `${XDG_CACHE_HOME:-~/.cache}/bingwall/`
-- Logs for scheduled runs: `journalctl --user -u bingwall.service`
-
-Downloaded wallpaper files are not evicted automatically. They remain in the cache until the cache directory is removed manually; an in-app cache clearing control is planned for a later release.
-
-Wallpaper descriptions and attribution are displayed exactly as provided by the external feed. Bingwall does not collect analytics or telemetry.
+The resulting package is written to `dist/`.
