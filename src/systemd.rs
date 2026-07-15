@@ -45,10 +45,7 @@ fn install_units(paths: &AppPaths) -> Result<(), SystemdError> {
     let executable = std::env::current_exe().map_err(SystemdError::Executable)?;
     let unit_dir = paths.config_dir.join("systemd-user");
     fs::create_dir_all(&unit_dir).map_err(SystemdError::Install)?;
-    let service = format!(
-        "[Unit]\nDescription=Apply the current Bingwall wallpaper\nAfter=network-online.target\n\n[Service]\nType=oneshot\nExecStart={} update\n",
-        escape_unit_path(&executable)
-    );
+    let service = service_unit(&executable);
     fs::write(unit_dir.join("bingwall.service"), service).map_err(SystemdError::Install)?;
     fs::write(unit_dir.join("bingwall.timer"), TIMER).map_err(SystemdError::Install)?;
 
@@ -58,6 +55,14 @@ fn install_units(paths: &AppPaths) -> Result<(), SystemdError> {
     fs::create_dir_all(&systemd_dir).map_err(SystemdError::Install)?;
     copy_unit(&unit_dir.join("bingwall.service"), &systemd_dir)?;
     copy_unit(&unit_dir.join("bingwall.timer"), &systemd_dir)
+}
+
+/// Builds the fallback user service for installations without packaged units.
+fn service_unit(executable: &Path) -> String {
+    format!(
+        "[Unit]\nDescription=Apply the current Bingwall wallpaper\nAfter=network-online.target\nStartLimitIntervalSec=10min\nStartLimitBurst=3\n\n[Service]\nType=oneshot\nExecStart={} update\nRestart=on-failure\nRestartSec=30s\n",
+        escape_unit_path(executable)
+    )
 }
 
 /// Copies a generated unit file into the destination unit directory.
@@ -102,5 +107,23 @@ mod tests {
             escape_unit_path(Path::new("/home/me/Bing Wall/bingwall")),
             "/home/me/Bing\\x20Wall/bingwall"
         );
+    }
+
+    #[test]
+    /// Verifies a boot-time session-environment race is retried after login settles.
+    fn packaged_service_retries_transient_startup_failures() {
+        let service = include_str!("../packaging/systemd/bingwall.service");
+        assert!(service.contains("Restart=on-failure"));
+        assert!(service.contains("RestartSec=30s"));
+        assert!(service.contains("StartLimitBurst=3"));
+    }
+
+    #[test]
+    /// Verifies locally generated services use the same retry policy.
+    fn generated_service_retries_transient_startup_failures() {
+        let service = service_unit(Path::new("/usr/bin/bingwall"));
+        assert!(service.contains("Restart=on-failure"));
+        assert!(service.contains("RestartSec=30s"));
+        assert!(service.contains("StartLimitBurst=3"));
     }
 }
