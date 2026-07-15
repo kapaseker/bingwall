@@ -170,14 +170,28 @@ pub fn run() -> iced::Result {
     iced::application(boot, update, ui::view)
         .title("Bingwall")
         .subscription(subscription)
-        .window(window::Settings {
-            size: Size::new(BASE_WIDTH, BASE_HEIGHT),
-            min_size: Some(Size::new(BASE_WIDTH, BASE_HEIGHT)),
-            ..window::Settings::default()
-        })
+        .window(window_settings())
         .centered()
         .antialiasing(true)
         .run()
+}
+
+/// Configures the window identity used by desktop launchers and task switchers.
+fn window_settings() -> window::Settings {
+    window::Settings {
+        size: Size::new(BASE_WIDTH, BASE_HEIGHT),
+        min_size: Some(Size::new(BASE_WIDTH, BASE_HEIGHT)),
+        icon: window::icon::from_file_data(
+            include_bytes!("../packaging/icons/bingwall-256.png"),
+            None,
+        )
+        .ok(),
+        platform_specific: window::settings::PlatformSpecific {
+            application_id: "bingwall".to_owned(),
+            ..window::settings::PlatformSpecific::default()
+        },
+        ..window::Settings::default()
+    }
 }
 
 /// Creates the initial application state and starts background initialization.
@@ -1069,6 +1083,14 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
+
+    #[test]
+    /// Verifies Cinnamon can associate the running window with its desktop entry and icon.
+    fn window_has_packaged_application_identity() {
+        let settings = window_settings();
+        assert!(settings.icon.is_some());
+        assert_eq!(settings.platform_specific.application_id, "bingwall");
+    }
 
     /// Creates isolated cache and configuration paths for an application test.
     fn temporary_paths(label: &str) -> AppPaths {
