@@ -20,6 +20,10 @@ install -Dm755 target/release/bingwall "$package_root/usr/bin/bingwall"
 strip --strip-unneeded "$package_root/usr/bin/bingwall"
 install -Dm644 packaging/bingwall.desktop \
   "$package_root/usr/share/applications/bingwall.desktop"
+for size in 48 128 256 512; do
+  install -Dm644 "packaging/icons/bingwall-${size}.png" \
+    "$package_root/usr/share/icons/hicolor/${size}x${size}/apps/bingwall.png"
+done
 install -Dm644 packaging/systemd/bingwall.service \
   "$package_root/usr/lib/systemd/user/bingwall.service"
 install -Dm644 packaging/systemd/bingwall.timer \
