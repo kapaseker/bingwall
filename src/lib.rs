@@ -11,6 +11,7 @@ pub mod settings;
 pub mod systemd;
 mod theme;
 mod ui;
+pub mod wallpaper;
 
 pub const FEED_URL: &str =
     "https://raw.githubusercontent.com/niumoo/bing-wallpaper/refs/heads/main/bing-wallpaper.md";

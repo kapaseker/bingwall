@@ -1,6 +1,5 @@
 use std::{
     borrow::Cow,
-    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -15,7 +14,7 @@ use crate::{
     resources::{Locale, TextResource, current_locale, generated_text as texts, set_locale},
     service::{self, FeedOrigin},
     settings::Settings,
-    systemd, ui,
+    ui, wallpaper,
 };
 
 const PAGE_BATCH: usize = 10;
@@ -695,12 +694,9 @@ fn apply_selected_task(state: &mut State) -> Task<Message> {
     state.status = StatusText::localized(texts::working);
     Task::perform(
         async move {
-            let image = service::ensure_image(&client, &paths, &entry)
+            wallpaper::apply_selected(desktop, paths, client, entry)
                 .await
-                .map_err(|error| error.to_string())?;
-            tokio::task::spawn_blocking(move || apply_wallpaper(desktop, paths, entry, image))
-                .await
-                .map_err(|error| error.to_string())?
+                .map_err(|error| error.to_string())
         },
         Message::Applied,
     )
@@ -722,73 +718,13 @@ fn toggle_daily_task(state: &mut State, enabled: bool) -> Task<Message> {
     state.busy = true;
     state.status = StatusText::localized(texts::working);
     Task::perform(
-        async move { set_daily_change(enabled, desktop, paths, current, client).await },
+        async move {
+            wallpaper::set_daily_change(enabled, desktop, paths, client, current)
+                .await
+                .map_err(|error| error.to_string())
+        },
         move |result| Message::ToggleFinished(enabled, result),
     )
-}
-
-/// Applies an image and persists the selected wallpaper metadata.
-fn apply_wallpaper(
-    desktop: Desktop,
-    paths: AppPaths,
-    entry: WallpaperEntry,
-    image: PathBuf,
-) -> Result<Settings, String> {
-    desktop.apply(&image).map_err(|error| error.to_string())?;
-    let mut settings = Settings::load(&paths.settings_file()).map_err(|error| error.to_string())?;
-    settings.applied_image = Some(image.to_string_lossy().into_owned());
-    settings.last_update_status = Some(format!("Updated to {}", entry.date));
-    settings
-        .save(&paths.settings_file())
-        .map_err(|error| error.to_string())?;
-    Ok(settings)
-}
-
-/// Updates the systemd timer, optionally applies today's image, and persists the setting.
-async fn set_daily_change(
-    enabled: bool,
-    desktop: Desktop,
-    paths: AppPaths,
-    current: Option<WallpaperEntry>,
-    client: reqwest::Client,
-) -> Result<Settings, String> {
-    let settings_path = paths.settings_file();
-    let mut settings = tokio::task::spawn_blocking(move || Settings::load(&settings_path))
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())?;
-    let (image, applied_date) = if enabled {
-        let entry = current.ok_or_else(|| "the wallpaper feed is empty".to_owned())?;
-        let date = entry.date.clone();
-        (
-            Some(
-                service::ensure_image(&client, &paths, &entry)
-                    .await
-                    .map_err(|error| error.to_string())?,
-            ),
-            Some(date),
-        )
-    } else {
-        (None, None)
-    };
-    tokio::task::spawn_blocking(move || {
-        if let Some(image) = image {
-            desktop.apply(&image).map_err(|error| error.to_string())?;
-            systemd::enable(&paths).map_err(|error| error.to_string())?;
-            settings.applied_image = Some(image.to_string_lossy().into_owned());
-            let date = applied_date.expect("enabled daily change has a current entry");
-            settings.last_update_status = Some(format!("Updated to {date}"));
-        } else {
-            systemd::disable().map_err(|error| error.to_string())?;
-        }
-        settings.daily_change = enabled;
-        settings
-            .save(&paths.settings_file())
-            .map_err(|error| error.to_string())?;
-        Ok(settings)
-    })
-    .await
-    .map_err(|error| error.to_string())?
 }
 
 /// Maps keyboard, wheel, and touch gestures to wallpaper navigation.

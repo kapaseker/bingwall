@@ -28,13 +28,12 @@ fn run_update() -> ExitCode {
         }
     };
 
-    match runtime.block_on(bingwall::service::run_scheduled_update()) {
+    match runtime.block_on(bingwall::wallpaper::run_scheduled_update()) {
         Ok(path) => {
             println!("Applied {}", path.display());
             ExitCode::SUCCESS
         }
         Err(error) => {
-            bingwall::service::mark_failed_update(&error);
             eprintln!("Wallpaper update failed: {error}");
             ExitCode::FAILURE
         }
