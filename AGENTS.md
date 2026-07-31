@@ -8,7 +8,8 @@
 
 ## Project map
 
-- `src/app.rs`: application state, messages, update logic, subscriptions, and window setup.
+- `src/app.rs`: application state, Iced message/event mapping, subscriptions, and window setup.
+- `src/pager.rs`, `src/preview.rs`, `src/wallpaper.rs`: pager behavior, preview residency, and wallpaper workflows.
 - `src/ui.rs`, `src/ui/`: view construction and custom Iced widgets; keep business and I/O logic out of views.
 - `src/service.rs`: asynchronous workflow orchestration and network operations.
 - `src/feed.rs`, `src/cache.rs`, `src/settings.rs`, `src/paths.rs`: feed parsing, persistent cache, settings, and filesystem paths.

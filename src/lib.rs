@@ -1,6 +1,7 @@
 pub mod app;
 pub mod cache;
 pub mod feed;
+pub(crate) mod pager;
 pub mod paths;
 pub mod platform;
 pub(crate) mod preview;

@@ -98,21 +98,21 @@ fn translated_page(page: Element<'static, Message>, x: f32) -> Element<'static, 
 
 /// Chooses the centered page and the adjacent page exposed by the current offset.
 fn visible_pages(state: &State, offset: f32) -> (usize, Option<usize>) {
-    if let Some(transition) = &state.transition
+    if let Some(transition) = state.pager.transition()
         && transition.from != transition.to
     {
         return (transition.from, Some(transition.to));
     }
 
     let neighbor = if offset < 0.0 {
-        state.selected.checked_add(1)
+        state.pager.selected().checked_add(1)
     } else if offset > 0.0 {
-        state.selected.checked_sub(1)
+        state.pager.selected().checked_sub(1)
     } else {
         None
     }
     .filter(|index| *index < state.entries.len());
-    (state.selected, neighbor)
+    (state.pager.selected(), neighbor)
 }
 
 /// Builds the top setting, edge navigation, and bottom metadata overlays.
@@ -155,7 +155,7 @@ fn top_controls(state: &State) -> Element<'_, Message> {
 
 /// Builds the previous and next icon buttons centered on the window edges.
 fn navigation_controls(state: &State) -> Element<'_, Message> {
-    let motion_idle = state.transition.is_none();
+    let motion_idle = !state.pager.is_moving();
     let previous = button(
         iced_svg(image!(ic_left).svg_handle())
             .width(dimension!(navigation_icon_size))
@@ -168,7 +168,7 @@ fn navigation_controls(state: &State) -> Element<'_, Message> {
     ])
     .style(theme::edge_navigation)
     .on_press_maybe(
-        (state.selected > 0 && !state.busy && motion_idle).then_some(Message::Previous),
+        (state.pager.selected() > 0 && !state.busy && motion_idle).then_some(Message::Previous),
     );
     let next = button(
         iced_svg(image!(ic_right).svg_handle())
@@ -182,7 +182,7 @@ fn navigation_controls(state: &State) -> Element<'_, Message> {
     ])
     .style(theme::edge_navigation)
     .on_press_maybe(
-        (state.selected + 1 < state.entries.len() && !state.busy && motion_idle)
+        (state.pager.selected() + 1 < state.entries.len() && !state.busy && motion_idle)
             .then_some(Message::Next),
     );
 
@@ -239,7 +239,7 @@ fn bottom_controls(state: &State) -> Element<'_, Message> {
 
 /// Builds the date, position, and description for the selected wallpaper.
 fn selected_details(state: &State) -> Element<'_, Message> {
-    let Some(entry) = state.entries.get(state.selected) else {
+    let Some(entry) = state.entries.get(state.pager.selected()) else {
         return iced_text(text!(loading_feed))
             .size(dimension!(text_loading))
             .into();
@@ -248,8 +248,12 @@ fn selected_details(state: &State) -> Element<'_, Message> {
         row![
             iced_text(&entry.date).size(dimension!(text_label)),
             Space::new().width(Fill),
-            iced_text(text!(page_counter, state.selected + 1, state.entries.len()))
-                .size(dimension!(text_counter)),
+            iced_text(text!(
+                page_counter,
+                state.pager.selected() + 1,
+                state.entries.len()
+            ))
+            .size(dimension!(text_counter)),
         ],
         iced_text(&entry.description).size(dimension!(text_description)),
     ]
