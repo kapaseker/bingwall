@@ -8,6 +8,7 @@ use iced::{Point, Size, Subscription, Task, event, keyboard, mouse, touch, widge
 use crate::{
     cache,
     feed::WallpaperEntry,
+    image_acquisition,
     pager::Pager,
     paths::AppPaths,
     platform::Desktop,
@@ -441,7 +442,7 @@ fn execute_preview_commands(
             let client = client.clone();
             Task::perform(
                 async move {
-                    service::ensure_preview(&client, &paths, &entry)
+                    image_acquisition::preview(&client, &paths, &entry)
                         .await
                         .map_err(|error| error.to_string())
                 },

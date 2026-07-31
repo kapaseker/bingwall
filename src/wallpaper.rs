@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::{
-    feed::WallpaperEntry, paths::AppPaths, platform::Desktop, service, settings::Settings, systemd,
+    feed::WallpaperEntry, image_acquisition, paths::AppPaths, platform::Desktop, service,
+    settings::Settings, systemd,
 };
 
 /// Reports failures from applying wallpapers or configuring Daily Change.
@@ -145,7 +146,7 @@ impl WallpaperRuntime for SystemRuntime {
         &mut self,
         entry: &WallpaperEntry,
     ) -> Result<PathBuf, WallpaperError> {
-        service::ensure_image(&self.client, &self.paths, entry)
+        image_acquisition::original(&self.client, &self.paths, entry)
             .await
             .map_err(operation_error)
     }

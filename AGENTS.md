@@ -10,9 +10,10 @@
 
 - `src/app.rs`: application state, Iced message/event mapping, subscriptions, and window setup.
 - `src/pager.rs`, `src/preview.rs`, `src/wallpaper.rs`: pager behavior, preview residency, and wallpaper workflows.
+- `src/image_acquisition.rs`, `src/cache.rs`: image acquisition/recovery policy and low-level persistent cache operations.
 - `src/ui.rs`, `src/ui/`: view construction and custom Iced widgets; keep business and I/O logic out of views.
-- `src/service.rs`: asynchronous workflow orchestration and network operations.
-- `src/feed.rs`, `src/cache.rs`, `src/settings.rs`, `src/paths.rs`: feed parsing, persistent cache, settings, and filesystem paths.
+- `src/service.rs`: Wallpaper Feed network refresh and cached-feed fallback.
+- `src/feed.rs`, `src/settings.rs`, `src/paths.rs`: feed parsing, settings persistence, and filesystem paths.
 - `src/platform.rs`, `src/systemd.rs`: desktop integration and user-service management.
 - `src/resources/`, `src/theme/`: typed resources and reusable Iced styles.
 - `assets/resources/`: source UI resources consumed by `build.rs`.
