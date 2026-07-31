@@ -1,6 +1,5 @@
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -12,6 +11,7 @@ use crate::{
     feed::WallpaperEntry,
     paths::AppPaths,
     platform::Desktop,
+    preview::{PreviewCommand, PreviewEvent, PreviewFailure, PreviewResidency},
     resources::{Locale, TextResource, current_locale, generated_text as texts, set_locale},
     service::{self, FeedOrigin},
     settings::Settings,
@@ -22,7 +22,6 @@ const PAGE_BATCH: usize = 10;
 const TRANSITION_DURATION: Duration = Duration::from_millis(360);
 const MIN_TRANSITION_DURATION: Duration = Duration::from_millis(120);
 const WHEEL_DEBOUNCE: Duration = Duration::from_millis(240);
-const MAX_IMAGE_TASKS: usize = 2;
 const GPU_PRELOAD_LIMIT: usize = 4;
 pub(crate) const BASE_WIDTH: f32 = 1280.0;
 pub(crate) const BASE_HEIGHT: f32 = 720.0;
@@ -87,16 +86,7 @@ pub(crate) struct State {
     pub visible_count: usize,
     pub selected: usize,
     client: Option<reqwest::Client>,
-    preview_paths: HashMap<String, PathBuf>,
-    preview_allocations: HashMap<String, image::Allocation>,
-    allocating_previews: HashSet<String>,
-    queued_previews: VecDeque<WallpaperEntry>,
-    active_previews: HashSet<String>,
-    failed_previews: HashSet<String>,
-    failed_allocations: HashSet<String>,
-    invalidated_previews: HashSet<String>,
-    gpu_preload_limit: usize,
-    retried_current_allocation: HashSet<String>,
+    previews: PreviewResidency,
     pub status: StatusText,
     pub busy: bool,
     locale_save_in_flight: bool,
@@ -116,9 +106,7 @@ impl State {
     /// Returns the allocated GPU image handle for an entry when it is ready.
     pub(crate) fn preview_handle(&self, index: usize) -> Option<image::Handle> {
         let image_url = &self.entries.get(index)?.image_url;
-        self.preview_allocations
-            .get(image_url)
-            .map(|allocation| allocation.handle().clone())
+        self.previews.handle_for(image_url)
     }
 
     /// Reports whether the selected wallpaper has an allocated preview.
@@ -144,9 +132,7 @@ pub(crate) enum Message {
     Initialized(Result<Startup, String>),
     Refresh,
     FeedLoaded(Result<(Vec<WallpaperEntry>, FeedOrigin), String>),
-    PreviewReady(String, Result<PathBuf, String>),
-    PreviewAllocated(String, Result<image::Allocation, image::Error>),
-    PreviewInvalidated(String, Result<(), String>),
+    Preview(PreviewEvent),
     Previous,
     Next,
     SetWallpaper,
@@ -207,16 +193,7 @@ fn boot() -> (State, Task<Message>) {
         visible_count: 0,
         selected: 0,
         client: None,
-        preview_paths: HashMap::new(),
-        preview_allocations: HashMap::new(),
-        allocating_previews: HashSet::new(),
-        queued_previews: VecDeque::new(),
-        active_previews: HashSet::new(),
-        failed_previews: HashSet::new(),
-        failed_allocations: HashSet::new(),
-        invalidated_previews: HashSet::new(),
-        gpu_preload_limit: GPU_PRELOAD_LIMIT,
-        retried_current_allocation: HashSet::new(),
+        previews: PreviewResidency::new(),
         status: StatusText::localized(texts::loading_feed),
         busy: true,
         locale_save_in_flight: false,
@@ -312,7 +289,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             }
         },
         Message::Refresh => {
-            state.failed_previews.clear();
+            state.previews.retry_acquisitions();
             refresh_task(state, true)
         }
         Message::FeedLoaded(result) => {
@@ -337,95 +314,7 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
                 }
             }
         }
-        Message::PreviewReady(image_url, result) => {
-            state.active_previews.remove(&image_url);
-            match result {
-                Ok(path) => {
-                    state.failed_previews.remove(&image_url);
-                    state.failed_allocations.remove(&image_url);
-                    state.preview_paths.insert(image_url.clone(), path);
-                }
-                Err(error) => {
-                    state.failed_previews.insert(image_url.clone());
-                    if is_current_url(state, &image_url) {
-                        state.status = error.into();
-                    }
-                }
-            }
-            schedule_previews(state)
-        }
-        Message::PreviewAllocated(image_url, result) => {
-            state.allocating_previews.remove(&image_url);
-            match result {
-                Ok(allocation) if desired_preview_urls(state).contains(&image_url) => {
-                    state.preview_allocations.insert(image_url, allocation);
-                }
-                Ok(_) => {}
-                Err(image::Error::OutOfMemory) => {
-                    state.gpu_preload_limit = state.gpu_preload_limit.saturating_sub(1).max(1);
-                    if !is_current_url(state, &image_url)
-                        || !state.retried_current_allocation.insert(image_url.clone())
-                    {
-                        state.failed_allocations.insert(image_url.clone());
-                        if is_current_url(state, &image_url) {
-                            state.status = image::Error::OutOfMemory.to_string().into();
-                        }
-                    }
-                }
-                Err(
-                    error @ (image::Error::Invalid(_)
-                    | image::Error::Inaccessible(_)
-                    | image::Error::Empty),
-                ) => {
-                    if state.invalidated_previews.insert(image_url.clone()) {
-                        let path = state.preview_paths.remove(&image_url);
-                        return Task::perform(
-                            async move {
-                                let Some(path) = path else {
-                                    return Ok(());
-                                };
-                                tokio::task::spawn_blocking(move || std::fs::remove_file(path))
-                                    .await
-                                    .map_err(|error| error.to_string())?
-                                    .or_else(|error| {
-                                        (error.kind() == std::io::ErrorKind::NotFound)
-                                            .then_some(())
-                                            .ok_or(error)
-                                    })
-                                    .map_err(|error| error.to_string())
-                            },
-                            move |result| Message::PreviewInvalidated(image_url.clone(), result),
-                        );
-                    }
-                    state.failed_allocations.insert(image_url.clone());
-                    if is_current_url(state, &image_url) {
-                        state.status = error.to_string().into();
-                    }
-                }
-                Err(error) => {
-                    state.failed_allocations.insert(image_url.clone());
-                    if is_current_url(state, &image_url) {
-                        state.status = error.to_string().into();
-                    }
-                }
-            }
-            schedule_previews(state)
-        }
-        Message::PreviewInvalidated(image_url, result) => {
-            state.failed_allocations.remove(&image_url);
-            match result {
-                Ok(()) => {
-                    state.failed_previews.remove(&image_url);
-                }
-                Err(error) => {
-                    state.failed_previews.insert(image_url.clone());
-                    if is_current_url(state, &image_url) {
-                        state.status = error.into();
-                    }
-                }
-            }
-            schedule_previews(state)
-        }
+        Message::Preview(event) => handle_preview_event(state, event),
         Message::Previous => navigate(state, -1),
         Message::Next => navigate(state, 1),
         Message::SetWallpaper => apply_selected_task(state),
@@ -567,85 +456,89 @@ fn schedule_previews(state: &mut State) -> Task<Message> {
     }
 
     let desired_entries = desired_preview_entries(state);
-    let desired_urls = desired_entries
-        .iter()
-        .map(|entry| entry.image_url.clone())
-        .collect::<Vec<_>>();
-    let gpu_urls = desired_urls
-        .iter()
-        .take(state.gpu_preload_limit)
-        .cloned()
-        .collect::<HashSet<_>>();
-    state
-        .preview_allocations
-        .retain(|url, _| gpu_urls.contains(url));
+    let commands = state.previews.reconcile(&desired_entries);
+    execute_preview_commands(commands, paths, client)
+}
 
-    for entry in &desired_entries {
-        let url = &entry.image_url;
-        if state.preview_paths.contains_key(url)
-            || state.active_previews.contains(url)
-            || state.failed_previews.contains(url)
-            || state
-                .queued_previews
-                .iter()
-                .any(|queued| queued.image_url == *url)
-        {
-            continue;
-        }
-        state.queued_previews.push_back(entry.clone());
-    }
-
-    let priority = desired_urls
-        .iter()
-        .enumerate()
-        .map(|(rank, url)| (url.as_str(), rank))
-        .collect::<HashMap<_, _>>();
-    state
-        .queued_previews
-        .make_contiguous()
-        .sort_by_key(|entry| {
-            priority
-                .get(entry.image_url.as_str())
-                .copied()
-                .unwrap_or(usize::MAX)
-        });
-
-    let mut tasks = Vec::new();
-    while state.active_previews.len() < MAX_IMAGE_TASKS {
-        let Some(entry) = state.queued_previews.pop_front() else {
-            break;
+/// Routes a completed preview event through the residency module.
+fn handle_preview_event(state: &mut State, event: PreviewEvent) -> Task<Message> {
+    let (Some(paths), Some(client)) = (state.paths.clone(), state.client.clone()) else {
+        return Task::none();
+    };
+    let desired_entries = desired_preview_entries(state);
+    let preview_update = state.previews.handle(event, &desired_entries);
+    if let Some(failure) = preview_update.selected_failure {
+        let message = match failure {
+            PreviewFailure::Acquisition(error) | PreviewFailure::Invalidation(error) => error,
+            PreviewFailure::Allocation(error) => error.to_string(),
         };
-        let image_url = entry.image_url.clone();
-        state.active_previews.insert(image_url.clone());
-        let paths = paths.clone();
-        let client = client.clone();
-        tasks.push(Task::perform(
+        state.status = message.into();
+    }
+    execute_preview_commands(preview_update.commands, paths, client)
+}
+
+/// Converts preview commands into Iced tasks without owning preview policy.
+fn execute_preview_commands(
+    commands: Vec<PreviewCommand>,
+    paths: AppPaths,
+    client: reqwest::Client,
+) -> Task<Message> {
+    Task::batch(commands.into_iter().map(|command| match command {
+        PreviewCommand::Acquire(entry) => {
+            let image_url = entry.image_url.clone();
+            let paths = paths.clone();
+            let client = client.clone();
+            Task::perform(
+                async move {
+                    service::ensure_preview(&client, &paths, &entry)
+                        .await
+                        .map_err(|error| error.to_string())
+                },
+                move |result| {
+                    Message::Preview(PreviewEvent::Acquired {
+                        image_url: image_url.clone(),
+                        result,
+                    })
+                },
+            )
+        }
+        PreviewCommand::Allocate { image_url, path } => {
+            image::allocate(image::Handle::from_path(path)).map(move |result| {
+                Message::Preview(match result {
+                    Ok(allocation) => PreviewEvent::Allocated {
+                        image_url: image_url.clone(),
+                        allocation,
+                    },
+                    Err(error) => PreviewEvent::AllocationFailed {
+                        image_url: image_url.clone(),
+                        error,
+                    },
+                })
+            })
+        }
+        PreviewCommand::RemoveInvalid { image_url, path } => Task::perform(
             async move {
-                service::ensure_preview(&client, &paths, &entry)
+                let Some(path) = path else {
+                    return Ok(());
+                };
+                tokio::task::spawn_blocking(move || std::fs::remove_file(path))
                     .await
+                    .map_err(|error| error.to_string())?
+                    .or_else(|error| {
+                        (error.kind() == std::io::ErrorKind::NotFound)
+                            .then_some(())
+                            .ok_or(error)
+                    })
                     .map_err(|error| error.to_string())
             },
-            move |result| Message::PreviewReady(image_url.clone(), result),
-        ));
-    }
-
-    for image_url in desired_urls.into_iter().take(state.gpu_preload_limit) {
-        if state.preview_allocations.contains_key(&image_url)
-            || state.failed_allocations.contains(&image_url)
-            || !state.allocating_previews.insert(image_url.clone())
-        {
-            continue;
-        }
-        let Some(path) = state.preview_paths.get(&image_url).cloned() else {
-            state.allocating_previews.remove(&image_url);
-            continue;
-        };
-        tasks.push(
-            image::allocate(image::Handle::from_path(path))
-                .map(move |result| Message::PreviewAllocated(image_url.clone(), result)),
-        );
-    }
-    Task::batch(tasks)
+            move |result| {
+                Message::Preview(PreviewEvent::Invalidated {
+                    image_url: image_url.clone(),
+                    result,
+                })
+            },
+        ),
+    }))
 }
 
 /// Returns unique entries to preload in navigation-priority order.
@@ -670,22 +563,6 @@ fn desired_preview_entries(state: &State) -> Vec<WallpaperEntry> {
         .collect()
 }
 
-/// Returns the image URLs currently eligible for preview allocation.
-fn desired_preview_urls(state: &State) -> HashSet<String> {
-    desired_preview_entries(state)
-        .into_iter()
-        .map(|entry| entry.image_url)
-        .collect()
-}
-
-/// Reports whether an image URL belongs to the selected entry.
-fn is_current_url(state: &State, image_url: &str) -> bool {
-    state
-        .entries
-        .get(state.selected)
-        .is_some_and(|entry| entry.image_url == image_url)
-}
-
 /// Moves the selection within bounds, extends the visible page, and starts a transition.
 fn navigate(state: &mut State, direction: isize) -> Task<Message> {
     navigate_from_offset(state, direction, 0.0)
@@ -703,8 +580,7 @@ fn navigate_from_offset(state: &mut State, direction: isize, start_offset: f32) 
     let previous = state.selected;
     state.selected = next;
     if let Some(entry) = state.entries.get(state.selected) {
-        state.failed_previews.remove(&entry.image_url);
-        state.failed_allocations.remove(&entry.image_url);
+        state.previews.retry(&entry.image_url);
     }
     if state.selected + 2 >= state.visible_count && state.visible_count < state.entries.len() {
         state.visible_count = (state.visible_count + PAGE_BATCH).min(state.entries.len());
@@ -1124,16 +1000,7 @@ mod tests {
             visible_count: count.min(PAGE_BATCH),
             selected: 0,
             client: Some(reqwest::Client::new()),
-            preview_paths: HashMap::new(),
-            preview_allocations: HashMap::new(),
-            allocating_previews: HashSet::new(),
-            queued_previews: VecDeque::new(),
-            active_previews: HashSet::new(),
-            failed_previews: HashSet::new(),
-            failed_allocations: HashSet::new(),
-            invalidated_previews: HashSet::new(),
-            gpu_preload_limit: GPU_PRELOAD_LIMIT,
-            retried_current_allocation: HashSet::new(),
+            previews: PreviewResidency::new(),
             status: StatusText::Raw(String::new()),
             busy: false,
             locale_save_in_flight: false,
@@ -1346,14 +1213,10 @@ mod tests {
     }
 
     #[test]
-    /// Verifies an unchanged refresh keeps the current selection and loaded previews.
-    fn unchanged_background_refresh_preserves_loaded_images_and_selection() {
+    /// Verifies an unchanged refresh keeps the current selection.
+    fn unchanged_background_refresh_preserves_selection() {
         let mut state = state_with_entries(3);
         state.selected = 1;
-        let selected_url = state.entries[1].image_url.clone();
-        state
-            .preview_paths
-            .insert(selected_url.clone(), PathBuf::from("cached.jpg"));
         let entries = state.entries.clone();
 
         let _ = update(
@@ -1362,78 +1225,5 @@ mod tests {
         );
 
         assert_eq!(state.selected, 1);
-        assert_eq!(
-            state.preview_paths.get(&selected_url),
-            Some(&PathBuf::from("cached.jpg"))
-        );
-    }
-
-    #[test]
-    /// Verifies completed off-window previews remain cached without consuming GPU preload space.
-    fn completed_old_feed_task_is_kept_without_entering_the_gpu_window() {
-        let mut state = state_with_entries(1);
-        let stale_url = "https://cn.bing.com/old.jpg".to_owned();
-        state.active_previews.insert(stale_url.clone());
-
-        let _ = update(
-            &mut state,
-            Message::PreviewReady(stale_url.clone(), Ok(PathBuf::from("old-preview.jpg"))),
-        );
-
-        assert_eq!(
-            state.preview_paths.get(&stale_url),
-            Some(&PathBuf::from("old-preview.jpg"))
-        );
-        assert!(state.preview_allocations.is_empty());
-        assert!(state.active_previews.is_empty());
-    }
-
-    #[test]
-    /// Verifies queued preview work follows a changed selection without discarding prior work.
-    fn queued_previews_are_reprioritized_without_being_cancelled() {
-        let mut state = state_with_entries(6);
-        state.selected = 2;
-        state.paths = Some(temporary_paths("queue"));
-
-        let _ = schedule_previews(&mut state);
-        assert_eq!(
-            state.active_previews,
-            HashSet::from([
-                "https://cn.bing.com/2.jpg".to_owned(),
-                "https://cn.bing.com/3.jpg".to_owned(),
-            ])
-        );
-
-        let _ = navigate(&mut state, -1);
-        let queued = state
-            .queued_previews
-            .iter()
-            .map(|entry| entry.image_url.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            queued,
-            vec![
-                "https://cn.bing.com/1.jpg",
-                "https://cn.bing.com/0.jpg",
-                "https://cn.bing.com/4.jpg",
-            ]
-        );
-    }
-
-    #[test]
-    /// Verifies GPU exhaustion reduces preloading and retries the selected preview only once.
-    fn gpu_out_of_memory_reduces_preload_window_and_retries_current_once() {
-        let mut state = state_with_entries(4);
-        let current_url = state.entries[0].image_url.clone();
-        state.allocating_previews.insert(current_url.clone());
-
-        let _ = update(
-            &mut state,
-            Message::PreviewAllocated(current_url.clone(), Err(image::Error::OutOfMemory)),
-        );
-
-        assert_eq!(state.gpu_preload_limit, 3);
-        assert!(state.retried_current_allocation.contains(&current_url));
-        assert!(!state.failed_allocations.contains(&current_url));
     }
 }

@@ -12,6 +12,10 @@ _Avoid_: Today's wallpaper, latest local wallpaper
 A dated image reference and its descriptive attribution parsed from the Wallpaper Feed.
 _Avoid_: Post, record
 
+**Wallpaper Preview**:
+A reduced-resolution cached image used only to display a Wallpaper Entry in the application. It is never used as the Applied Wallpaper.
+_Avoid_: Preview Wallpaper, cached wallpaper
+
 **Selected Wallpaper**:
 The Wallpaper Entry currently shown in the application's large preview. Selection alone never changes the desktop wallpaper.
 _Avoid_: Current wallpaper, active wallpaper

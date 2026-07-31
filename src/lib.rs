@@ -3,6 +3,7 @@ pub mod cache;
 pub mod feed;
 pub mod paths;
 pub mod platform;
+pub(crate) mod preview;
 #[macro_use]
 pub mod resources;
 pub mod service;
