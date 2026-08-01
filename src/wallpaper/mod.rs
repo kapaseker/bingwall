@@ -7,7 +7,7 @@ use thiserror::Error;
 pub(crate) mod image;
 
 use crate::{
-    feed::{self, WallpaperEntry},
+    feed::{self, WallpaperEntry, WallpaperSource},
     paths::AppPaths,
     platform::Desktop,
     settings::Settings,
@@ -29,7 +29,11 @@ pub enum WallpaperError {
 trait WallpaperRuntime {
     async fn load_settings(&mut self) -> Result<Settings, WallpaperError>;
     async fn save_settings(&mut self, settings: &Settings) -> Result<(), WallpaperError>;
-    async fn refresh_current(&mut self) -> Result<WallpaperEntry, WallpaperError>;
+    /// Refreshes and returns the Current Wallpaper for a requested source.
+    async fn refresh_current(
+        &mut self,
+        source: WallpaperSource,
+    ) -> Result<WallpaperEntry, WallpaperError>;
     async fn acquire_original(&mut self, entry: &WallpaperEntry)
     -> Result<PathBuf, WallpaperError>;
     async fn apply(&mut self, path: &Path) -> Result<(), WallpaperError>;
@@ -55,9 +59,11 @@ async fn apply_selected_with<R: WallpaperRuntime>(
 async fn set_daily_change_with<R: WallpaperRuntime>(
     runtime: &mut R,
     enabled: bool,
+    source: WallpaperSource,
     current: Option<WallpaperEntry>,
 ) -> Result<Settings, WallpaperError> {
     let mut settings = runtime.load_settings().await?;
+    let was_enabled = settings.daily_change;
     if enabled {
         let entry = current.ok_or(WallpaperError::EmptyFeed)?;
         let image = runtime.acquire_original(&entry).await?;
@@ -65,11 +71,17 @@ async fn set_daily_change_with<R: WallpaperRuntime>(
         runtime.enable_daily_change().await?;
         settings.applied_image = Some(image.to_string_lossy().into_owned());
         settings.last_update_status = Some(format!("Updated to {}", entry.date));
+        settings.daily_change_source = source;
     } else {
         runtime.disable_daily_change().await?;
     }
     settings.daily_change = enabled;
-    runtime.save_settings(&settings).await?;
+    if let Err(error) = runtime.save_settings(&settings).await {
+        if enabled && !was_enabled {
+            let _ = runtime.disable_daily_change().await;
+        }
+        return Err(error);
+    }
     Ok(settings)
 }
 
@@ -92,7 +104,9 @@ async fn run_scheduled_inner<R: WallpaperRuntime>(
     if !settings.daily_change {
         return Err(WallpaperError::DailyChangeDisabled);
     }
-    let current = runtime.refresh_current().await?;
+    let current = runtime
+        .refresh_current(settings.daily_change_source)
+        .await?;
     let image = runtime.acquire_original(&current).await?;
     runtime.apply(&image).await?;
     settings.applied_image = Some(image.to_string_lossy().into_owned());
@@ -138,8 +152,11 @@ impl WallpaperRuntime for SystemRuntime {
     }
 
     /// Refreshes the feed and returns its Current Wallpaper.
-    async fn refresh_current(&mut self) -> Result<WallpaperEntry, WallpaperError> {
-        feed::refresh_feed(&self.client, &self.paths)
+    async fn refresh_current(
+        &mut self,
+        source: WallpaperSource,
+    ) -> Result<WallpaperEntry, WallpaperError> {
+        feed::refresh_feed(&self.client, &self.paths, source)
             .await
             .map_err(operation_error)?
             .0
@@ -209,6 +226,7 @@ pub(crate) async fn apply_selected(
 /// Enables or disables Daily Change while preserving the current application behavior.
 pub(crate) async fn set_daily_change(
     enabled: bool,
+    source: WallpaperSource,
     desktop: Desktop,
     paths: AppPaths,
     client: reqwest::Client,
@@ -219,7 +237,7 @@ pub(crate) async fn set_daily_change(
         paths,
         client,
     };
-    set_daily_change_with(&mut runtime, enabled, current).await
+    set_daily_change_with(&mut runtime, enabled, source, current).await
 }
 
 /// Runs one systemd-compatible unattended Wallpaper Update.
@@ -261,7 +279,7 @@ mod tests {
     enum Call {
         LoadSettings,
         SaveSettings,
-        RefreshCurrent,
+        RefreshCurrent(WallpaperSource),
         Acquire(String),
         Apply(PathBuf),
         EnableDailyChange,
@@ -274,6 +292,8 @@ mod tests {
         original: PathBuf,
         calls: Vec<Call>,
         refresh_error: Option<WallpaperError>,
+        acquire_error: Option<WallpaperError>,
+        save_error: Option<WallpaperError>,
     }
 
     impl MemoryRuntime {
@@ -285,6 +305,8 @@ mod tests {
                 original: PathBuf::from("/cache/original.jpg"),
                 calls: Vec::new(),
                 refresh_error: None,
+                acquire_error: None,
+                save_error: None,
             }
         }
     }
@@ -299,13 +321,19 @@ mod tests {
         /// Persists settings in memory.
         async fn save_settings(&mut self, settings: &Settings) -> Result<(), WallpaperError> {
             self.calls.push(Call::SaveSettings);
+            if let Some(error) = self.save_error.clone() {
+                return Err(error);
+            }
             self.settings = settings.clone();
             Ok(())
         }
 
         /// Returns the configured Current Wallpaper.
-        async fn refresh_current(&mut self) -> Result<WallpaperEntry, WallpaperError> {
-            self.calls.push(Call::RefreshCurrent);
+        async fn refresh_current(
+            &mut self,
+            source: WallpaperSource,
+        ) -> Result<WallpaperEntry, WallpaperError> {
+            self.calls.push(Call::RefreshCurrent(source));
             if let Some(error) = self.refresh_error.clone() {
                 return Err(error);
             }
@@ -318,6 +346,9 @@ mod tests {
             entry: &WallpaperEntry,
         ) -> Result<PathBuf, WallpaperError> {
             self.calls.push(Call::Acquire(entry.image_url.clone()));
+            if let Some(error) = self.acquire_error.clone() {
+                return Err(error);
+            }
             Ok(self.original.clone())
         }
 
@@ -390,6 +421,7 @@ mod tests {
             .block_on(set_daily_change_with(
                 &mut runtime,
                 true,
+                WallpaperSource::Spotlight,
                 Some(current.clone()),
             ))
             .unwrap();
@@ -405,6 +437,7 @@ mod tests {
             ]
         );
         assert!(settings.daily_change);
+        assert_eq!(settings.daily_change_source, WallpaperSource::Spotlight);
         assert_eq!(
             settings.applied_image.as_deref(),
             Some("/cache/original.jpg")
@@ -420,10 +453,16 @@ mod tests {
     fn disabling_daily_change_only_stops_the_timer() {
         let mut runtime = MemoryRuntime::new();
         runtime.settings.daily_change = true;
+        runtime.settings.daily_change_source = WallpaperSource::Spotlight;
 
         let settings = tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(set_daily_change_with(&mut runtime, false, None))
+            .block_on(set_daily_change_with(
+                &mut runtime,
+                false,
+                WallpaperSource::Spotlight,
+                None,
+            ))
             .unwrap();
 
         assert_eq!(
@@ -438,10 +477,68 @@ mod tests {
     }
 
     #[test]
+    /// Verifies a failed source transfer retains the previous Daily Change assignment.
+    fn failed_daily_change_transfer_retains_previous_source() {
+        let mut runtime = MemoryRuntime::new();
+        runtime.settings.daily_change = true;
+        runtime.settings.daily_change_source = WallpaperSource::Bing;
+        runtime.acquire_error = Some(WallpaperError::Operation("download failed".into()));
+        let previous = runtime.settings.clone();
+        let current = runtime.current.clone();
+
+        let error = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(set_daily_change_with(
+                &mut runtime,
+                true,
+                WallpaperSource::Spotlight,
+                Some(current),
+            ))
+            .unwrap_err();
+
+        assert_eq!(error, WallpaperError::Operation("download failed".into()));
+        assert_eq!(runtime.settings, previous);
+    }
+
+    #[test]
+    /// Verifies a failed first enable save rolls the Daily Change timer back.
+    fn failed_first_enable_save_disables_the_new_timer() {
+        let mut runtime = MemoryRuntime::new();
+        runtime.save_error = Some(WallpaperError::Operation("save failed".into()));
+        let current = runtime.current.clone();
+
+        let error = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(set_daily_change_with(
+                &mut runtime,
+                true,
+                WallpaperSource::Spotlight,
+                Some(current),
+            ))
+            .unwrap_err();
+
+        assert_eq!(error, WallpaperError::Operation("save failed".into()));
+        assert!(!runtime.settings.daily_change);
+        assert_eq!(runtime.settings.daily_change_source, WallpaperSource::Bing);
+        assert!(matches!(
+            runtime.calls.as_slice(),
+            [
+                Call::LoadSettings,
+                Call::Acquire(_),
+                Call::Apply(_),
+                Call::EnableDailyChange,
+                Call::SaveSettings,
+                Call::DisableDailyChange
+            ]
+        ));
+    }
+
+    #[test]
     /// Verifies an unattended Wallpaper Update applies the refreshed Current Wallpaper.
     fn scheduled_update_uses_refreshed_current_wallpaper() {
         let mut runtime = MemoryRuntime::new();
         runtime.settings.daily_change = true;
+        runtime.settings.daily_change_source = WallpaperSource::Spotlight;
         let current = runtime.current.clone();
 
         let applied = tokio::runtime::Runtime::new()
@@ -454,7 +551,7 @@ mod tests {
             runtime.calls,
             vec![
                 Call::LoadSettings,
-                Call::RefreshCurrent,
+                Call::RefreshCurrent(WallpaperSource::Spotlight),
                 Call::Acquire(current.image_url),
                 Call::Apply(PathBuf::from("/cache/original.jpg")),
                 Call::SaveSettings,
@@ -471,6 +568,7 @@ mod tests {
     fn scheduled_update_records_failure() {
         let mut runtime = MemoryRuntime::new();
         runtime.settings.daily_change = true;
+        runtime.settings.daily_change_source = WallpaperSource::Spotlight;
         runtime.refresh_error = Some(WallpaperError::Operation("offline".into()));
 
         let error = tokio::runtime::Runtime::new()
@@ -483,7 +581,7 @@ mod tests {
             runtime.calls,
             vec![
                 Call::LoadSettings,
-                Call::RefreshCurrent,
+                Call::RefreshCurrent(WallpaperSource::Spotlight),
                 Call::LoadSettings,
                 Call::SaveSettings,
             ]

@@ -14,7 +14,7 @@ use pager::Pager;
 use preview::{PreviewCommand, PreviewEvent, PreviewFailure, PreviewResidency};
 
 use crate::{
-    feed::{self, FeedOrigin, WallpaperEntry},
+    feed::{self, FeedOrigin, WallpaperEntry, WallpaperSource},
     paths::AppPaths,
     platform::Desktop,
     resources::{Locale, TextResource, current_locale, generated_text as texts, set_locale},
@@ -68,8 +68,8 @@ pub(crate) struct State {
     previews: PreviewResidency,
     pub status: StatusText,
     pub busy: bool,
-    locale_save_in_flight: bool,
-    locale_save_pending: bool,
+    settings_save_in_flight: bool,
+    settings_save_pending: bool,
     window_size: Size,
     resize_target: Option<Size>,
     touch_finger: Option<touch::Finger>,
@@ -85,6 +85,12 @@ impl State {
     /// Reports whether the selected wallpaper has an allocated preview.
     pub(crate) fn selected_preview_is_ready(&self) -> bool {
         self.preview_handle(self.pager.selected()).is_some()
+    }
+
+    /// Reports whether Daily Change belongs to the source currently being browsed.
+    pub(crate) fn daily_change_enabled_for_selected_source(&self) -> bool {
+        self.settings.daily_change
+            && self.settings.selected_source == self.settings.daily_change_source
     }
 }
 
@@ -104,7 +110,12 @@ pub(crate) enum Startup {
 pub(crate) enum Message {
     Initialized(Result<Startup, String>),
     Refresh,
-    FeedLoaded(Result<(Vec<WallpaperEntry>, FeedOrigin), String>),
+    SelectSource(WallpaperSource),
+    SourceCacheLoaded(WallpaperSource, Vec<WallpaperEntry>),
+    FeedLoaded(
+        WallpaperSource,
+        Result<(Vec<WallpaperEntry>, FeedOrigin), String>,
+    ),
     Preview(PreviewEvent),
     Previous,
     Next,
@@ -114,7 +125,7 @@ pub(crate) enum Message {
     ToggleFinished(bool, Result<Settings, String>),
     #[allow(dead_code)]
     SetLocale(Locale),
-    LocaleSaved(Result<(), String>),
+    SettingsSaved(Result<(), String>),
     RuntimeEvent(iced::Event),
     CapturedTouchEvent(iced::Event),
     WindowResized(window::Id, Size),
@@ -168,8 +179,8 @@ fn boot() -> (State, Task<Message>) {
         previews: PreviewResidency::new(),
         status: StatusText::localized(texts::loading_feed),
         busy: true,
-        locale_save_in_flight: false,
-        locale_save_pending: false,
+        settings_save_in_flight: false,
+        settings_save_pending: false,
         window_size: Size::new(BASE_WIDTH, BASE_HEIGHT),
         resize_target: None,
         touch_finger: None,
@@ -192,7 +203,7 @@ fn load_startup() -> Result<Startup, String> {
     };
     let paths = AppPaths::discover().map_err(|error| error.to_string())?;
     let settings = Settings::load(&paths.settings_file()).map_err(|error| error.to_string())?;
-    let cached_entries = feed::load_cached(&paths)
+    let cached_entries = feed::load_cached(&paths, settings.selected_source)
         .ok()
         .filter(|entries| !entries.is_empty())
         .unwrap_or_default();
@@ -258,7 +269,24 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             state.previews.retry_acquisitions();
             refresh_task(state, true)
         }
-        Message::FeedLoaded(result) => {
+        Message::SelectSource(source) => select_source(state, source),
+        Message::SourceCacheLoaded(source, cached_entries) => {
+            if source != state.settings.selected_source {
+                return Task::none();
+            }
+            if cached_entries.is_empty() {
+                return refresh_task(state, true);
+            }
+            state.entries = cached_entries;
+            state.pager.reset(state.entries.len());
+            state.busy = false;
+            state.status = StatusText::localized(texts::cached_feed_refreshing);
+            Task::batch([schedule_previews(state), refresh_task(state, false)])
+        }
+        Message::FeedLoaded(source, result) => {
+            if source != state.settings.selected_source {
+                return Task::none();
+            }
             state.busy = false;
             match result {
                 Ok((entries, origin)) => {
@@ -287,10 +315,10 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             state.busy = false;
             match result {
                 Ok(settings) => {
-                    let locale_changed = merge_settings_preserving_locale(state, settings);
+                    let choices_changed = merge_settings_preserving_ui_choices(state, settings);
                     state.status = StatusText::localized(texts::applied);
-                    if locale_changed {
-                        return persist_locale_task(state);
+                    if choices_changed {
+                        return persist_settings_task(state);
                     }
                 }
                 Err(error) => state.status = error.into(),
@@ -302,14 +330,14 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
             state.busy = false;
             match result {
                 Ok(settings) => {
-                    let locale_changed = merge_settings_preserving_locale(state, settings);
+                    let choices_changed = merge_settings_preserving_ui_choices(state, settings);
                     state.status = StatusText::localized(if enabled {
                         texts::enabled
                     } else {
                         texts::disabled
                     });
-                    if locale_changed {
-                        return persist_locale_task(state);
+                    if choices_changed {
+                        return persist_settings_task(state);
                     }
                 }
                 Err(error) => state.status = error.into(),
@@ -319,13 +347,13 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
         Message::SetLocale(locale) => {
             set_locale(locale);
             state.settings.locale = Some(locale);
-            persist_locale_task(state)
+            persist_settings_task(state)
         }
-        Message::LocaleSaved(result) => {
-            state.locale_save_in_flight = false;
-            if state.locale_save_pending {
-                state.locale_save_pending = false;
-                return persist_locale_task(state);
+        Message::SettingsSaved(result) => {
+            state.settings_save_in_flight = false;
+            if state.settings_save_pending {
+                state.settings_save_pending = false;
+                return persist_settings_task(state);
             }
             if let Err(error) = result {
                 state.status = error.into();
@@ -351,26 +379,28 @@ fn update(state: &mut State, message: Message) -> Task<Message> {
     }
 }
 
-/// Merges asynchronously returned settings without losing the latest language choice.
-fn merge_settings_preserving_locale(state: &mut State, mut settings: Settings) -> bool {
+/// Merges workflow settings without losing newer UI-owned source or locale choices.
+fn merge_settings_preserving_ui_choices(state: &mut State, mut settings: Settings) -> bool {
     let locale = state.settings.locale;
-    let locale_changed = settings.locale != locale;
+    let selected_source = state.settings.selected_source;
+    let choices_changed = settings.locale != locale || settings.selected_source != selected_source;
     settings.locale = locale;
+    settings.selected_source = selected_source;
     state.settings = settings;
-    locale_changed
+    choices_changed
 }
 
-/// Serializes persistence of the current language choice so the latest selection wins.
-fn persist_locale_task(state: &mut State) -> Task<Message> {
-    if state.locale_save_in_flight {
-        state.locale_save_pending = true;
+/// Serializes persistence of UI-owned settings so the latest selection wins.
+fn persist_settings_task(state: &mut State) -> Task<Message> {
+    if state.settings_save_in_flight {
+        state.settings_save_pending = true;
         return Task::none();
     }
     let Some(paths) = state.paths.clone() else {
         return Task::none();
     };
     let settings = state.settings.clone();
-    state.locale_save_in_flight = true;
+    state.settings_save_in_flight = true;
     Task::perform(
         async move {
             tokio::task::spawn_blocking(move || settings.save(&paths.settings_file()))
@@ -378,7 +408,44 @@ fn persist_locale_task(state: &mut State) -> Task<Message> {
                 .map_err(|error| error.to_string())?
                 .map_err(|error| error.to_string())
         },
-        Message::LocaleSaved,
+        Message::SettingsSaved,
+    )
+}
+
+/// Switches browsing to another source without changing Applied Wallpaper or Daily Change.
+fn select_source(state: &mut State, source: WallpaperSource) -> Task<Message> {
+    if state.busy || source == state.settings.selected_source {
+        return Task::none();
+    }
+    let Some(paths) = state.paths.clone() else {
+        return Task::none();
+    };
+    state.settings.selected_source = source;
+    state.entries.clear();
+    state.pager.reset(0);
+    state.previews.source_changed();
+    state.busy = true;
+    state.status = StatusText::localized(texts::loading_feed);
+    Task::batch([
+        persist_settings_task(state),
+        load_source_cache_task(paths, source),
+    ])
+}
+
+/// Loads a selected source's cache away from the UI thread.
+fn load_source_cache_task(paths: AppPaths, source: WallpaperSource) -> Task<Message> {
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                feed::load_cached(&paths, source)
+                    .ok()
+                    .filter(|entries| !entries.is_empty())
+                    .unwrap_or_default()
+            })
+            .await
+            .unwrap_or_default()
+        },
+        move |entries| Message::SourceCacheLoaded(source, entries),
     )
 }
 
@@ -391,13 +458,14 @@ fn refresh_task(state: &mut State, blocking: bool) -> Task<Message> {
         state.busy = true;
         state.status = StatusText::localized(texts::loading_feed);
     }
+    let source = state.settings.selected_source;
     Task::perform(
         async move {
-            feed::refresh_feed(&client, &paths)
+            feed::refresh_feed(&client, &paths, source)
                 .await
                 .map_err(|error| error.to_string())
         },
-        Message::FeedLoaded,
+        move |result| Message::FeedLoaded(source, result),
     )
 }
 
@@ -575,6 +643,7 @@ fn toggle_daily_task(state: &mut State, enabled: bool) -> Task<Message> {
         return Task::none();
     };
     let current = state.entries.first().cloned();
+    let source = state.settings.selected_source;
     if enabled && current.is_none() {
         state.status = StatusText::localized(texts::loading_feed);
         return Task::none();
@@ -583,7 +652,7 @@ fn toggle_daily_task(state: &mut State, enabled: bool) -> Task<Message> {
     state.status = StatusText::localized(texts::working);
     Task::perform(
         async move {
-            wallpaper::set_daily_change(enabled, desktop, paths, client, current)
+            wallpaper::set_daily_change(enabled, source, desktop, paths, client, current)
                 .await
                 .map_err(|error| error.to_string())
         },
@@ -767,8 +836,8 @@ mod tests {
             previews: PreviewResidency::new(),
             status: StatusText::Raw(String::new()),
             busy: false,
-            locale_save_in_flight: false,
-            locale_save_pending: false,
+            settings_save_in_flight: false,
+            settings_save_pending: false,
             window_size: Size::new(BASE_WIDTH, BASE_HEIGHT),
             resize_target: None,
             touch_finger: None,
@@ -839,21 +908,21 @@ mod tests {
     }
 
     #[test]
-    /// Verifies rapid language changes coalesce into a final persistence task.
-    fn locale_persistence_keeps_the_latest_selection() {
+    /// Verifies rapid settings changes coalesce into a final persistence task.
+    fn settings_persistence_keeps_the_latest_selection() {
         let _locale_guard = crate::resources::lock_locale_tests();
         let mut state = state_with_entries(0);
         state.paths = Some(temporary_paths("locale-save"));
 
         let first = update(&mut state, Message::SetLocale(Locale::SimplifiedChinese));
-        assert!(state.locale_save_in_flight);
+        assert!(state.settings_save_in_flight);
         let second = update(&mut state, Message::SetLocale(Locale::English));
-        assert!(state.locale_save_pending);
+        assert!(state.settings_save_pending);
         drop((first, second));
 
-        let final_save = update(&mut state, Message::LocaleSaved(Ok(())));
-        assert!(state.locale_save_in_flight);
-        assert!(!state.locale_save_pending);
+        let final_save = update(&mut state, Message::SettingsSaved(Ok(())));
+        assert!(state.settings_save_in_flight);
+        assert!(!state.settings_save_pending);
         assert_eq!(state.settings.locale, Some(Locale::English));
         drop(final_save);
     }
@@ -867,9 +936,140 @@ mod tests {
 
         let _ = update(
             &mut state,
-            Message::FeedLoaded(Ok((entries, FeedOrigin::Network))),
+            Message::FeedLoaded(WallpaperSource::Bing, Ok((entries, FeedOrigin::Network))),
         );
 
         assert_eq!(state.pager.selected(), 1);
+    }
+
+    #[test]
+    /// Verifies selecting another source changes browsing state without moving Daily Change.
+    fn selecting_source_preserves_daily_change_assignment() {
+        let mut state = state_with_entries(3);
+        state.paths = Some(temporary_paths("select-source"));
+        state.settings.daily_change = true;
+        state.settings.daily_change_source = WallpaperSource::Bing;
+
+        let task = update(
+            &mut state,
+            Message::SelectSource(WallpaperSource::Spotlight),
+        );
+
+        assert_eq!(state.settings.selected_source, WallpaperSource::Spotlight);
+        assert_eq!(state.settings.daily_change_source, WallpaperSource::Bing);
+        assert!(state.settings.daily_change);
+        assert!(state.entries.is_empty());
+        assert!(state.busy);
+        drop(task);
+    }
+
+    #[test]
+    /// Verifies cached entries appear before the selected source refresh completes.
+    fn source_cache_is_displayed_before_network_refresh() {
+        let mut state = state_with_entries(0);
+        state.paths = Some(temporary_paths("source-cache"));
+        state.settings.selected_source = WallpaperSource::Spotlight;
+        state.busy = true;
+        let cached = vec![WallpaperEntry {
+            date: "2026-08-01".into(),
+            description: "Cliffs".into(),
+            image_url: "https://windows10spotlight.com/cliffs.jpg".into(),
+        }];
+
+        let task = update(
+            &mut state,
+            Message::SourceCacheLoaded(WallpaperSource::Spotlight, cached.clone()),
+        );
+
+        assert_eq!(state.entries, cached);
+        assert!(!state.busy);
+        assert_eq!(
+            state.status,
+            StatusText::Localized(texts::cached_feed_refreshing)
+        );
+        drop(task);
+    }
+
+    #[test]
+    /// Verifies a late Feed result cannot replace another source's current entries.
+    fn stale_cross_source_feed_result_is_ignored() {
+        let mut state = state_with_entries(1);
+        state.settings.selected_source = WallpaperSource::Spotlight;
+        state.busy = true;
+        let spotlight_entries = state.entries.clone();
+        let stale_bing = vec![WallpaperEntry {
+            date: "2026-01-01".into(),
+            description: "Bing".into(),
+            image_url: "https://cn.bing.com/stale.jpg".into(),
+        }];
+
+        let _ = update(
+            &mut state,
+            Message::FeedLoaded(WallpaperSource::Bing, Ok((stale_bing, FeedOrigin::Network))),
+        );
+
+        assert_eq!(state.entries, spotlight_entries);
+        assert!(state.busy);
+    }
+
+    #[test]
+    /// Verifies a refresh failure retains the selected source instead of falling back.
+    fn selected_source_is_retained_when_feed_refresh_fails() {
+        let mut state = state_with_entries(0);
+        state.settings.selected_source = WallpaperSource::Spotlight;
+        state.busy = true;
+
+        let _ = update(
+            &mut state,
+            Message::FeedLoaded(WallpaperSource::Spotlight, Err("offline".into())),
+        );
+
+        assert_eq!(state.settings.selected_source, WallpaperSource::Spotlight);
+        assert!(state.entries.is_empty());
+        assert!(!state.busy);
+        assert_eq!(state.status, StatusText::Raw("offline".into()));
+    }
+
+    #[test]
+    /// Verifies Daily Change appears enabled only while browsing its assigned source.
+    fn daily_change_visibility_follows_its_unique_source() {
+        let mut state = state_with_entries(0);
+        state.settings.daily_change = true;
+        state.settings.daily_change_source = WallpaperSource::Bing;
+        state.settings.selected_source = WallpaperSource::Bing;
+        assert!(state.daily_change_enabled_for_selected_source());
+
+        state.settings.selected_source = WallpaperSource::Spotlight;
+        assert!(!state.daily_change_enabled_for_selected_source());
+
+        state.settings.daily_change_source = WallpaperSource::Spotlight;
+        assert!(state.daily_change_enabled_for_selected_source());
+
+        state.settings.daily_change = false;
+        assert!(!state.daily_change_enabled_for_selected_source());
+    }
+
+    #[test]
+    /// Verifies workflow snapshots cannot replace newer UI-owned choices.
+    fn workflow_settings_merge_preserves_current_source_and_locale() {
+        let mut state = state_with_entries(0);
+        state.settings.selected_source = WallpaperSource::Spotlight;
+        state.settings.locale = Some(Locale::SimplifiedChinese);
+        let workflow_settings = Settings {
+            daily_change: true,
+            daily_change_source: WallpaperSource::Spotlight,
+            ..Settings::default()
+        };
+
+        let needs_persistence = merge_settings_preserving_ui_choices(&mut state, workflow_settings);
+
+        assert!(needs_persistence);
+        assert_eq!(state.settings.selected_source, WallpaperSource::Spotlight);
+        assert_eq!(state.settings.locale, Some(Locale::SimplifiedChinese));
+        assert!(state.settings.daily_change);
+        assert_eq!(
+            state.settings.daily_change_source,
+            WallpaperSource::Spotlight
+        );
     }
 }

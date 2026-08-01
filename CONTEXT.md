@@ -1,12 +1,24 @@
 # Bingwall
 
-Bingwall selects, previews, and applies daily Bing images as the desktop wallpaper for a Linux user.
+Bingwall selects, previews, and applies images from a user-selected wallpaper source as the desktop wallpaper for a Linux user.
 
 ## Language
 
 **Current Wallpaper**:
-The first valid entry in the Wallpaper Feed, regardless of whether its published date matches the user's local calendar date.
+The first valid entry in a Wallpaper Source's current Wallpaper Feed, regardless of whether its published date matches the user's local calendar date.
 _Avoid_: Today's wallpaper, latest local wallpaper
+
+**Wallpaper Source**:
+A named provider from which Bingwall obtains a Wallpaper Feed. Bing and Spotlight are Wallpaper Sources.
+_Avoid_: Provider, feed type
+
+**Selected Wallpaper Source**:
+The Wallpaper Source currently being browsed in the application. Changing it does not apply a wallpaper or change the Daily Change Source.
+_Avoid_: Current source, active source
+
+**Daily Change Source**:
+The single Wallpaper Source assigned to Daily Change. Assigning another source replaces the previous assignment.
+_Avoid_: Selected source, automatic source
 
 **Wallpaper Entry**:
 A dated image reference and its descriptive attribution parsed from the Wallpaper Feed.
@@ -25,7 +37,7 @@ The image currently assigned to the user's desktop, whether chosen manually or b
 _Avoid_: Selected wallpaper, preview
 
 **Wallpaper Feed**:
-The externally maintained, chronological collection of dated Bing wallpaper entries that Bingwall reads.
+An externally maintained, chronological collection of dated wallpaper entries supplied by one Wallpaper Source.
 _Avoid_: Source file, wallpaper list
 
 **Wallpaper Update**:
@@ -33,5 +45,5 @@ The unattended operation that refreshes the Wallpaper Feed and applies the Curre
 _Avoid_: UI refresh, sync
 
 **Daily Change**:
-The user-controlled opt-in setting that permits Bingwall to perform a Wallpaper Update at the scheduled time. It is disabled until the user explicitly enables it.
+The user-controlled opt-in setting that permits Bingwall to perform a Wallpaper Update from one Daily Change Source at the scheduled time. It is disabled until the user explicitly enables it.
 _Avoid_: Auto-refresh, timer

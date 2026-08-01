@@ -388,6 +388,7 @@ dependencies = [
  "dirs",
  "iced",
  "image",
+ "quick-xml",
  "regex",
  "reqwest",
  "serde",

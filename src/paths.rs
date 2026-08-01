@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+use crate::feed::WallpaperSource;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppPaths {
     pub config_dir: PathBuf,
@@ -36,9 +38,13 @@ impl AppPaths {
         self.config_dir.join("settings.json")
     }
 
-    /// Returns the path to the cached wallpaper feed.
-    pub fn feed_file(&self) -> PathBuf {
-        self.cache_dir.join("feed.json")
+    /// Returns the independent cached Wallpaper Feed path for a source.
+    pub(crate) fn feed_file(&self, source: WallpaperSource) -> PathBuf {
+        let filename = match source {
+            WallpaperSource::Bing => "feed.json",
+            WallpaperSource::Spotlight => "spotlight-feed.json",
+        };
+        self.cache_dir.join(filename)
     }
 
     /// Returns the directory that stores full-resolution wallpaper images.

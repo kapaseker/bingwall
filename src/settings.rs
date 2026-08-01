@@ -3,12 +3,14 @@ use std::{fs, io, path::Path};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::resources::Locale;
+use crate::{feed::WallpaperSource, resources::Locale};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub daily_change: bool,
+    pub(crate) selected_source: WallpaperSource,
+    pub(crate) daily_change_source: WallpaperSource,
     pub applied_image: Option<String>,
     pub last_update_status: Option<String>,
     pub locale: Option<Locale>,
@@ -52,6 +54,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
+    use crate::feed::WallpaperSource;
 
     #[test]
     /// Verifies a missing settings file produces disabled default settings.
@@ -81,6 +84,8 @@ mod tests {
         let path = root.join("settings.json");
         let settings = Settings {
             daily_change: true,
+            selected_source: WallpaperSource::Spotlight,
+            daily_change_source: WallpaperSource::Spotlight,
             applied_image: Some("wall.jpg".into()),
             last_update_status: Some("ok".into()),
             locale: Some(Locale::SimplifiedChinese),
@@ -98,8 +103,8 @@ mod tests {
     }
 
     #[test]
-    /// Verifies obsolete fields do not prevent older settings files from loading.
-    fn legacy_recent_image_list_is_ignored() {
+    /// Verifies legacy settings ignore obsolete data and bind source fields to Bing.
+    fn legacy_settings_default_source_fields_to_bing() {
         let value = br#"{
             "daily_change": true,
             "applied_image": "wall.jpg",
@@ -113,5 +118,7 @@ mod tests {
         assert_eq!(settings.applied_image.as_deref(), Some("wall.jpg"));
         assert_eq!(settings.last_update_status.as_deref(), Some("ok"));
         assert_eq!(settings.locale, None);
+        assert_eq!(settings.selected_source, WallpaperSource::Bing);
+        assert_eq!(settings.daily_change_source, WallpaperSource::Bing);
     }
 }

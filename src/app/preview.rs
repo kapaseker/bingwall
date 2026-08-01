@@ -112,6 +112,14 @@ impl PreviewResidency {
         self.failed_acquisitions.clear();
     }
 
+    /// Drops queued and failed work that no longer belongs to the browsed Feed.
+    pub(crate) fn source_changed(&mut self) {
+        self.queued_acquisitions.clear();
+        self.failed_acquisitions.clear();
+        self.failed_allocations.clear();
+        self.retried_selected_allocations.clear();
+    }
+
     /// Reconciles desired Wallpaper Previews and returns work in priority order.
     pub(crate) fn reconcile(&mut self, desired_entries: &[WallpaperEntry]) -> Vec<PreviewCommand> {
         let gpu_urls = desired_entries
@@ -341,6 +349,33 @@ mod tests {
                     path: PathBuf::from("preview-0.jpg"),
                 },
             ]
+        );
+    }
+
+    #[test]
+    /// Verifies switching sources drops old queued work without cancelling active work.
+    fn source_change_discards_queued_preview_acquisitions() {
+        let old = (0..4).map(entry).collect::<Vec<_>>();
+        let new = vec![WallpaperEntry {
+            date: "2026-08-01".into(),
+            description: "Spotlight".into(),
+            image_url: "https://windows10spotlight.com/new.jpg".into(),
+        }];
+        let mut residency = PreviewResidency::new();
+        let _ = residency.reconcile(&old);
+
+        residency.source_changed();
+        let update = residency.handle(
+            PreviewEvent::Acquired {
+                image_url: old[0].image_url.clone(),
+                result: Ok(PathBuf::from("old-preview.jpg")),
+            },
+            &new,
+        );
+
+        assert_eq!(
+            update.commands,
+            vec![PreviewCommand::Acquire(new[0].clone())]
         );
     }
 

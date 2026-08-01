@@ -1,6 +1,6 @@
 use iced::widget::{
-    Space, Stack, button, column, container, image as iced_image, mouse_area, responsive, row,
-    svg as iced_svg, text as iced_text, toggler,
+    Space, Stack, button, column, container, image as iced_image, mouse_area, radio, responsive,
+    row, svg as iced_svg, text as iced_text, toggler,
 };
 use iced::{ContentFit, Element, Fill, Length, Padding, Size};
 
@@ -10,6 +10,7 @@ use translated::translate_x;
 
 use crate::{
     app::{Message, State, transition_offset},
+    feed::WallpaperSource,
     theme,
 };
 
@@ -133,24 +134,59 @@ fn controls(state: &State) -> Element<'_, Message> {
         .into()
 }
 
-/// Builds the title-free top overlay containing only the daily-change setting.
+/// Builds strictly centered source radios beside an independently aligned Daily Change control.
 fn top_controls(state: &State) -> Element<'_, Message> {
-    let daily_toggle = toggler(state.settings.daily_change)
+    let selected_source = Some(state.settings.selected_source);
+    let source_selector = row![
+        radio(
+            text!(bing),
+            WallpaperSource::Bing,
+            selected_source,
+            Message::SelectSource,
+        )
+        .size(dimension!(toggle_size))
+        .spacing(dimension!(toggle_spacing))
+        .text_size(dimension!(text_label)),
+        radio(
+            text!(spotlight),
+            WallpaperSource::Spotlight,
+            selected_source,
+            Message::SelectSource,
+        )
+        .size(dimension!(toggle_size))
+        .spacing(dimension!(toggle_spacing))
+        .text_size(dimension!(text_label)),
+    ]
+    .spacing(dimension!(source_selector_spacing))
+    .align_y(iced::Center);
+    let daily_toggle = toggler(state.daily_change_enabled_for_selected_source())
         .label(text!(daily_change))
         .size(dimension!(toggle_size))
         .text_size(dimension!(text_label))
         .spacing(dimension!(toggle_spacing))
         .on_toggle_maybe((!state.busy).then_some(Message::ToggleDaily));
 
-    container(row![Space::new().width(Fill), daily_toggle].align_y(iced::Center))
-        .padding([
-            dimension!(top_padding_vertical),
-            dimension!(top_padding_horizontal),
-        ])
+    let centered_source = container(source_selector).center(Fill);
+    let trailing_daily = container(row![Space::new().width(Fill), daily_toggle])
         .width(Fill)
-        .height(dimension!(top_overlay_height))
-        .style(theme::top_scrim)
-        .into()
+        .height(Fill)
+        .center_y(Fill);
+
+    container(
+        Stack::new()
+            .push(centered_source)
+            .push(trailing_daily)
+            .width(Fill)
+            .height(Fill),
+    )
+    .padding([
+        dimension!(top_padding_vertical),
+        dimension!(top_padding_horizontal),
+    ])
+    .width(Fill)
+    .height(dimension!(top_overlay_height))
+    .style(theme::top_scrim)
+    .into()
 }
 
 /// Builds the previous and next icon buttons centered on the window edges.
