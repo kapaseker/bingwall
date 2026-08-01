@@ -1,3 +1,5 @@
+//! Owns Selected Wallpaper navigation and horizontal pager motion.
+
 use std::time::{Duration, Instant};
 
 const PAGE_BATCH: usize = 10;

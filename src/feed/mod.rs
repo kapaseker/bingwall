@@ -4,21 +4,33 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod cache;
+mod refresh;
+
+pub(crate) use refresh::{FeedOrigin, refresh_feed};
+
+use crate::paths::AppPaths;
+
+/// Loads the cached Wallpaper Feed for local-first application startup.
+pub(crate) fn load_cached(paths: &AppPaths) -> Result<Vec<WallpaperEntry>, cache::CacheError> {
+    cache::load_feed(paths)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WallpaperEntry {
+pub(crate) struct WallpaperEntry {
     pub date: String,
     pub description: String,
     pub image_url: String,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
-pub enum FeedError {
+pub(crate) enum FeedError {
     #[error("the wallpaper feed contains no valid HTTPS entries")]
     NoEntries,
 }
 
 /// Extracts dated HTTPS wallpaper entries from the Markdown feed in source order.
-pub fn parse(markdown: &str) -> Result<Vec<WallpaperEntry>, FeedError> {
+pub(crate) fn parse(markdown: &str) -> Result<Vec<WallpaperEntry>, FeedError> {
     static ENTRY: OnceLock<Regex> = OnceLock::new();
     let entry = ENTRY.get_or_init(|| {
         Regex::new(r"(?s)(\d{4}-\d{2}-\d{2})\s*\|\s*\[(.*?)\]\((https://[^)]+)\)")

@@ -1,3 +1,5 @@
+//! Owns Wallpaper Preview scheduling and GPU residency policy.
+
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,

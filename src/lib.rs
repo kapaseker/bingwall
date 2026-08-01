@@ -1,22 +1,14 @@
 pub mod app;
-pub mod cache;
-pub mod feed;
-pub(crate) mod image_acquisition;
-pub(crate) mod pager;
-pub mod paths;
-pub mod platform;
-pub(crate) mod preview;
+mod feed;
+mod paths;
+mod platform;
 #[macro_use]
-pub mod resources;
-pub mod service;
-pub mod settings;
-pub mod systemd;
+mod resources;
+mod settings;
+mod systemd;
 mod theme;
 mod ui;
 pub mod wallpaper;
-
-pub const FEED_URL: &str =
-    "https://raw.githubusercontent.com/niumoo/bing-wallpaper/refs/heads/main/bing-wallpaper.md";
 
 #[cfg(test)]
 mod generated_resource_macro_tests {

@@ -1,8 +1,12 @@
+//! Owns original image and Wallpaper Preview acquisition and recovery policy.
+
 use std::{io, path::PathBuf, time::Duration};
 
 use thiserror::Error;
 
-use crate::{cache, feed::WallpaperEntry, paths::AppPaths};
+mod cache;
+
+use crate::{feed::WallpaperEntry, paths::AppPaths};
 
 /// Reports failures while acquiring an original image or Wallpaper Preview.
 #[derive(Debug, Error)]

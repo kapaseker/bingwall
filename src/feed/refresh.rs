@@ -1,32 +1,33 @@
 use thiserror::Error;
 
-use crate::{
-    FEED_URL, cache,
-    feed::{self, WallpaperEntry},
-    paths::AppPaths,
-};
+use crate::paths::AppPaths;
+
+use super::{FeedError, WallpaperEntry, cache, parse};
+
+const FEED_URL: &str =
+    "https://raw.githubusercontent.com/niumoo/bing-wallpaper/refs/heads/main/bing-wallpaper.md";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FeedOrigin {
+pub(crate) enum FeedOrigin {
     Network,
     Cache,
 }
 
 #[derive(Debug, Error)]
-pub enum ServiceError {
+pub(crate) enum RefreshError {
     #[error("network request failed: {0}")]
     Network(#[from] reqwest::Error),
     #[error("wallpaper feed is invalid: {0}")]
-    Feed(#[from] feed::FeedError),
+    Feed(#[from] FeedError),
     #[error("cached data is unavailable: {0}")]
     Cache(#[from] cache::CacheError),
 }
 
 /// Fetches and caches the remote feed, falling back to the cached feed when refresh fails.
-pub async fn refresh_feed(
+pub(crate) async fn refresh_feed(
     client: &reqwest::Client,
     paths: &AppPaths,
-) -> Result<(Vec<WallpaperEntry>, FeedOrigin), ServiceError> {
+) -> Result<(Vec<WallpaperEntry>, FeedOrigin), RefreshError> {
     let remote = async {
         let markdown = client
             .get(FEED_URL)
@@ -35,9 +36,9 @@ pub async fn refresh_feed(
             .error_for_status()?
             .text()
             .await?;
-        let entries = feed::parse(&markdown)?;
+        let entries = parse(&markdown)?;
         cache::save_feed(paths, &entries)?;
-        Ok::<_, ServiceError>(entries)
+        Ok::<_, RefreshError>(entries)
     }
     .await;
 
@@ -45,6 +46,6 @@ pub async fn refresh_feed(
         Ok(entries) => Ok((entries, FeedOrigin::Network)),
         Err(_) => cache::load_feed(paths)
             .map(|entries| (entries, FeedOrigin::Cache))
-            .map_err(ServiceError::Cache),
+            .map_err(RefreshError::Cache),
     }
 }

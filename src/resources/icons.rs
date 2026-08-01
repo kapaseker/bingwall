@@ -11,7 +11,8 @@ impl ImageResource {
     }
 
     /// Returns the resource path relative to the assets resource directory.
-    pub fn path(self) -> &'static str {
+    #[cfg(test)]
+    pub(crate) fn path(self) -> &'static str {
         self.path
     }
 

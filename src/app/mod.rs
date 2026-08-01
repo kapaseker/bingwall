@@ -1,3 +1,5 @@
+//! Owns application state, messages, tasks, subscriptions, and window setup.
+
 use std::{
     borrow::Cow,
     time::{Duration, Instant},
@@ -5,16 +7,17 @@ use std::{
 
 use iced::{Point, Size, Subscription, Task, event, keyboard, mouse, touch, widget::image, window};
 
+pub(crate) mod pager;
+mod preview;
+
+use pager::Pager;
+use preview::{PreviewCommand, PreviewEvent, PreviewFailure, PreviewResidency};
+
 use crate::{
-    cache,
-    feed::WallpaperEntry,
-    image_acquisition,
-    pager::Pager,
+    feed::{self, FeedOrigin, WallpaperEntry},
     paths::AppPaths,
     platform::Desktop,
-    preview::{PreviewCommand, PreviewEvent, PreviewFailure, PreviewResidency},
     resources::{Locale, TextResource, current_locale, generated_text as texts, set_locale},
-    service::{self, FeedOrigin},
     settings::Settings,
     ui, wallpaper,
 };
@@ -138,7 +141,7 @@ fn window_settings() -> window::Settings {
         size: Size::new(BASE_WIDTH, BASE_HEIGHT),
         min_size: Some(Size::new(BASE_WIDTH, BASE_HEIGHT)),
         icon: window::icon::from_file_data(
-            include_bytes!("../packaging/icons/bingwall-256.png"),
+            include_bytes!("../../packaging/icons/bingwall-256.png"),
             None,
         )
         .ok(),
@@ -189,7 +192,7 @@ fn load_startup() -> Result<Startup, String> {
     };
     let paths = AppPaths::discover().map_err(|error| error.to_string())?;
     let settings = Settings::load(&paths.settings_file()).map_err(|error| error.to_string())?;
-    let cached_entries = cache::load_feed(&paths)
+    let cached_entries = feed::load_cached(&paths)
         .ok()
         .filter(|entries| !entries.is_empty())
         .unwrap_or_default();
@@ -390,7 +393,7 @@ fn refresh_task(state: &mut State, blocking: bool) -> Task<Message> {
     }
     Task::perform(
         async move {
-            service::refresh_feed(&client, &paths)
+            feed::refresh_feed(&client, &paths)
                 .await
                 .map_err(|error| error.to_string())
         },
@@ -442,7 +445,7 @@ fn execute_preview_commands(
             let client = client.clone();
             Task::perform(
                 async move {
-                    image_acquisition::preview(&client, &paths, &entry)
+                    wallpaper::image::preview(&client, &paths, &entry)
                         .await
                         .map_err(|error| error.to_string())
                 },

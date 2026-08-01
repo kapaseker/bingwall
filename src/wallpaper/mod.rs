@@ -1,10 +1,17 @@
+//! Owns Selected Wallpaper, Daily Change, and Wallpaper Update workflows.
+
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+pub(crate) mod image;
+
 use crate::{
-    feed::WallpaperEntry, image_acquisition, paths::AppPaths, platform::Desktop, service,
-    settings::Settings, systemd,
+    feed::{self, WallpaperEntry},
+    paths::AppPaths,
+    platform::Desktop,
+    settings::Settings,
+    systemd,
 };
 
 /// Reports failures from applying wallpapers or configuring Daily Change.
@@ -132,7 +139,7 @@ impl WallpaperRuntime for SystemRuntime {
 
     /// Refreshes the feed and returns its Current Wallpaper.
     async fn refresh_current(&mut self) -> Result<WallpaperEntry, WallpaperError> {
-        service::refresh_feed(&self.client, &self.paths)
+        feed::refresh_feed(&self.client, &self.paths)
             .await
             .map_err(operation_error)?
             .0
@@ -146,7 +153,7 @@ impl WallpaperRuntime for SystemRuntime {
         &mut self,
         entry: &WallpaperEntry,
     ) -> Result<PathBuf, WallpaperError> {
-        image_acquisition::original(&self.client, &self.paths, entry)
+        image::original(&self.client, &self.paths, entry)
             .await
             .map_err(operation_error)
     }

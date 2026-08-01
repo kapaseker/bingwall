@@ -1,3 +1,5 @@
+//! Owns persistent original image and Wallpaper Preview cache operations.
+
 use std::{
     fs::{self, File},
     hash::{DefaultHasher, Hash, Hasher},
@@ -6,44 +8,14 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use image::{DynamicImage, GenericImageView, ImageDecoder, ImageReader, codecs::jpeg::JpegEncoder};
-use thiserror::Error;
-
 use crate::{feed::WallpaperEntry, paths::AppPaths};
+use image::{DynamicImage, GenericImageView, ImageDecoder, ImageReader, codecs::jpeg::JpegEncoder};
 
 pub const PREVIEW_WIDTH: u32 = 1920;
 pub const PREVIEW_HEIGHT: u32 = 1080;
 pub const PREVIEW_JPEG_QUALITY: u8 = 80;
 
 static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-#[derive(Debug, Error)]
-pub enum CacheError {
-    #[error("could not read cached feed: {0}")]
-    ReadFeed(#[source] io::Error),
-    #[error("could not decode cached feed: {0}")]
-    DecodeFeed(#[source] serde_json::Error),
-    #[error("could not encode cached feed: {0}")]
-    EncodeFeed(#[source] serde_json::Error),
-    #[error("could not write cached feed: {0}")]
-    WriteFeed(#[source] io::Error),
-}
-
-/// Loads and deserializes the cached wallpaper feed.
-pub fn load_feed(paths: &AppPaths) -> Result<Vec<WallpaperEntry>, CacheError> {
-    let data = fs::read(paths.feed_file()).map_err(CacheError::ReadFeed)?;
-    serde_json::from_slice(&data).map_err(CacheError::DecodeFeed)
-}
-
-/// Serializes the wallpaper feed and replaces the cache file atomically.
-pub fn save_feed(paths: &AppPaths, entries: &[WallpaperEntry]) -> Result<(), CacheError> {
-    fs::create_dir_all(&paths.cache_dir).map_err(CacheError::WriteFeed)?;
-    let data = serde_json::to_vec(entries).map_err(CacheError::EncodeFeed)?;
-    let destination = paths.feed_file();
-    let temporary = destination.with_extension("json.tmp");
-    fs::write(&temporary, data).map_err(CacheError::WriteFeed)?;
-    fs::rename(temporary, destination).map_err(CacheError::WriteFeed)
-}
 
 /// Builds the stable cache path for an entry's original image.
 pub fn image_path(paths: &AppPaths, entry: &WallpaperEntry) -> PathBuf {
@@ -160,27 +132,17 @@ mod tests {
     }
 
     #[test]
-    /// Verifies feed persistence and deterministic, distinct image cache paths.
-    fn feed_round_trips_and_image_names_are_stable() {
+    /// Verifies original and Wallpaper Preview cache names are stable and distinct.
+    fn image_names_are_stable_and_distinct() {
         let paths = temporary_paths();
-        let entries = vec![WallpaperEntry {
+        let entry = WallpaperEntry {
             date: "2026-01-01".into(),
             description: "Lake".into(),
             image_url: "https://cn.bing.com/lake.jpg".into(),
-        }];
+        };
 
-        save_feed(&paths, &entries).unwrap();
-        assert_eq!(load_feed(&paths).unwrap(), entries);
-        assert_eq!(
-            image_path(&paths, &entries[0]),
-            image_path(&paths, &entries[0])
-        );
-        assert_ne!(
-            image_path(&paths, &entries[0]),
-            preview_path(&paths, &entries[0])
-        );
-
-        fs::remove_dir_all(paths.cache_dir.parent().unwrap()).unwrap();
+        assert_eq!(image_path(&paths, &entry), image_path(&paths, &entry));
+        assert_ne!(image_path(&paths, &entry), preview_path(&paths, &entry));
     }
 
     #[test]
