@@ -1,6 +1,6 @@
 [package]
 name = "bingwall"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 build = "build.rs"
 
@@ -8,7 +8,7 @@ build = "build.rs"
 dirs = "6"
 iced = { version = "0.14", features = ["advanced", "image", "svg", "tokio"] }
 image = "0.25"
-quick-xml = "0.39.4"
+quick-xml = "0.41.0"
 regex = "1"
 reqwest = "0.13"
 serde = { version = "1", features = ["derive"] }

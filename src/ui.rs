@@ -192,46 +192,60 @@ fn top_controls(state: &State) -> Element<'_, Message> {
 /// Builds the previous and next icon buttons centered on the window edges.
 fn navigation_controls(state: &State) -> Element<'_, Message> {
     let motion_idle = !state.pager.is_moving();
-    let previous = button(
-        iced_svg(image!(ic_left).svg_handle())
-            .width(dimension!(navigation_icon_size))
-            .height(dimension!(navigation_icon_size))
-            .style(theme::navigation_icon),
-    )
-    .padding([
-        dimension!(navigation_button_padding_vertical),
-        dimension!(navigation_button_padding_horizontal),
-    ])
-    .style(theme::edge_navigation)
-    .on_press_maybe(
-        (state.pager.selected() > 0 && !state.busy && motion_idle).then_some(Message::Previous),
-    );
-    let next = button(
-        iced_svg(image!(ic_right).svg_handle())
-            .width(dimension!(navigation_icon_size))
-            .height(dimension!(navigation_icon_size))
-            .style(theme::navigation_icon),
-    )
-    .padding([
-        dimension!(navigation_button_padding_vertical),
-        dimension!(navigation_button_padding_horizontal),
-    ])
-    .style(theme::edge_navigation)
-    .on_press_maybe(
-        (state.pager.selected() + 1 < state.entries.len() && !state.busy && motion_idle)
-            .then_some(Message::Next),
-    );
+    let (show_previous, show_next) =
+        navigation_visibility(state.pager.selected(), state.entries.len());
+    let mut navigation = row![]
+        .spacing(dimension!(navigation_spacing))
+        .align_y(iced::Center);
+    if show_previous {
+        navigation = navigation.push(
+            button(
+                iced_svg(image!(ic_left).svg_handle())
+                    .width(dimension!(navigation_icon_size))
+                    .height(dimension!(navigation_icon_size))
+                    .style(theme::navigation_icon),
+            )
+            .padding([
+                dimension!(navigation_button_padding_vertical),
+                dimension!(navigation_button_padding_horizontal),
+            ])
+            .style(theme::edge_navigation)
+            .on_press_maybe((!state.busy && motion_idle).then_some(Message::Previous)),
+        );
+    }
+    navigation = navigation.push(Space::new().width(Fill));
+    if show_next {
+        navigation = navigation.push(
+            button(
+                iced_svg(image!(ic_right).svg_handle())
+                    .width(dimension!(navigation_icon_size))
+                    .height(dimension!(navigation_icon_size))
+                    .style(theme::navigation_icon),
+            )
+            .padding([
+                dimension!(navigation_button_padding_vertical),
+                dimension!(navigation_button_padding_horizontal),
+            ])
+            .style(theme::edge_navigation)
+            .on_press_maybe((!state.busy && motion_idle).then_some(Message::Next)),
+        );
+    }
 
-    container(
-        row![previous, Space::new().width(Fill), next]
-            .spacing(dimension!(navigation_spacing))
-            .align_y(iced::Center),
+    container(navigation)
+        .padding([0.0, dimension!(navigation_horizontal_inset)])
+        .width(Fill)
+        .height(Fill)
+        .center_y(Fill)
+        .into()
+}
+
+/// Reports which navigation directions have an adjacent Wallpaper Entry.
+fn navigation_visibility(selected: usize, entry_count: usize) -> (bool, bool) {
+    let has_selection = selected < entry_count;
+    (
+        has_selection && selected > 0,
+        has_selection && selected + 1 < entry_count,
     )
-    .padding([0.0, dimension!(navigation_horizontal_inset)])
-    .width(Fill)
-    .height(Fill)
-    .center_y(Fill)
-    .into()
 }
 
 /// Builds the metadata, actions, and status overlay at the bottom of the image.
@@ -311,5 +325,30 @@ fn preview_image(handle: Option<iced::widget::image::Handle>) -> Element<'static
             .center(Fill)
             .style(theme::fallback_background)
             .into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    /// Verifies an empty or single-entry Feed exposes no navigation directions.
+    fn navigation_visibility_hides_both_directions_without_a_neighbor() {
+        assert_eq!(navigation_visibility(0, 0), (false, false));
+        assert_eq!(navigation_visibility(0, 1), (false, false));
+    }
+
+    #[test]
+    /// Verifies the first and last entries expose only their valid navigation direction.
+    fn navigation_visibility_hides_the_direction_beyond_each_boundary() {
+        assert_eq!(navigation_visibility(0, 3), (false, true));
+        assert_eq!(navigation_visibility(2, 3), (true, false));
+    }
+
+    #[test]
+    /// Verifies an entry between both boundaries exposes both navigation directions.
+    fn navigation_visibility_shows_both_directions_between_boundaries() {
+        assert_eq!(navigation_visibility(1, 3), (true, true));
     }
 }
